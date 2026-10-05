@@ -15,6 +15,19 @@
 #       Writes the response body to OUTDIR/body and
 #       "status<TAB>content-type<TAB>curl-exit" to OUTDIR/meta; exit 28 is a
 #       timeout (Net::OpenTimeout / Net::ReadTimeout).
+#   bin/net resolve HOST OUT
+#       Writes HOST's addresses to OUT, one per line, as the system resolver
+#       (hosts file, then DNS) answers -- Resolv.getaddresses' sources.
+#       Deciding which addresses are public is lib/opengraph.gbln's job.
+#   bin/net request METHOD URL HOST PORT IP OUTDIR
+#       One GET or HEAD to URL, connecting to IP rather than resolving HOST
+#       again (Net::HTTP.start(host, port, ipaddr: ip)), with Net::HTTP's
+#       default headers and timeouts and without following redirects.
+#       Bodies over 5 MB are refused (Opengraph::Fetch::MAX_BODY_SIZE).
+#       Writes OUTDIR/meta ("status<TAB>curl-exit"), OUTDIR/location and
+#       OUTDIR/content_type (the raw headers), and for a GET OUTDIR/text:
+#       the body as UTF-8, converted from the charset its <meta> declares
+#       (as Nokogiri decodes it) with invalid bytes dropped.
 set -u
 cmd=$1; shift
 
@@ -32,5 +45,35 @@ case "$cmd" in
       "$url" 2> "$out/error")
     status=$?
     printf '%s\t%s\n' "$meta" "$status" > "$out/meta"
+    ;;
+  resolve)
+    getent ahosts "$1" 2> /dev/null | awk '{ print $1 }' | awk '!seen[$0]++' > "$2"
+    ;;
+  request)
+    method=$1; url=$2; host=$3; port=$4; ip=$5; out=$6
+    mkdir -p "$out"
+    case "$ip" in *:*) pin="[$ip]" ;; *) pin=$ip ;; esac
+    args=(--silent --globoff --path-as-is --max-filesize 5242880
+      --connect-timeout 60 --max-time 120
+      --resolve "$host:$port:$pin" -H "Accept: */*" -H "User-Agent: Ruby"
+      -D "$out/headers" -w '%{http_code}')
+    if [ "$method" = HEAD ]; then
+      args+=(--head -o /dev/null)
+    else
+      args+=(--compressed -H "Accept-Encoding: gzip;q=1.0,deflate;q=0.6,identity;q=0.3" -o "$out/body")
+    fi
+    code=$(curl "${args[@]}" "$url")
+    status=$?
+    printf '%s\t%s\n' "$code" "$status" > "$out/meta"
+    header() { grep -i "^$1:" "$out/headers" 2> /dev/null | tail -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r\n'; }
+    header location > "$out/location"
+    header content-type > "$out/content_type"
+    if [ "$method" = GET ] && [ -f "$out/body" ]; then
+      charset=$(head -c 1048576 "$out/body" | grep -aoiE '<meta[^>]*charset[[:space:]]*=[[:space:]]*["'"'"']?[A-Za-z0-9_.:-]+' | head -1 | sed -E 's/.*charset[[:space:]]*=[[:space:]]*["'"'"']?//')
+      case "$(echo "$charset" | tr A-Z a-z)" in
+        ""|utf-8|utf8) iconv -f UTF-8 -t UTF-8 -c "$out/body" > "$out/text" 2> /dev/null ;;
+        *) iconv -f "$charset" -t UTF-8//TRANSLIT "$out/body" > "$out/text" 2> /dev/null || iconv -f UTF-8 -t UTF-8 -c "$out/body" > "$out/text" 2> /dev/null ;;
+      esac
+    fi
     ;;
 esac

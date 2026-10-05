@@ -23,6 +23,7 @@ import lib/controllers/boosts as boosts
 import lib/controllers/bot_api as bot_api
 import lib/controllers/blobs as blobs
 import lib/controllers/qr_code as qr_code
+import lib/controllers/unfurl_links as unfurl_links
 
 
 act not_found(c)
@@ -118,6 +119,7 @@ act dispatch(c)
     if bot => return forbidden()
 
     if n == 1 and s[0] == "session" and m == "DELETE" => return sessions::destroy(c)
+    if n == 1 and s[0] == "unfurl_link" and m == "POST" => return unfurl_links::create(c)
 
     if n == 0 => return rooms::root(c)
     if n == 3 and s[0] == "users" and s[2] == "avatar" and m == "GET" => return files::avatar(c, s[1])

@@ -1,0 +1,632 @@
+/// lib/opengraph.gbln -- Opengraph::Metadata, ::Location, ::Fetch and
+/// ::Document, behind POST /unfurl_link.
+///
+/// The page and the image are fetched with curl (bin/net: Goblin has no
+/// HTTP client), one request per call so that every redirect is checked
+/// here as Opengraph::Fetch checks it. RestrictedHTTP::PrivateNetworkGuard
+/// (the surfguard gem's address policy) is reimplemented below: the system
+/// resolver supplies the addresses and this module decides which are
+/// public, pinning the request to the first public one.
+
+import lib/html as html
+import lib/multipart as multipart
+
+/// ---------- small helpers ----------
+
+act idiv(a, b)
+    return :int(:floor(a / b))
+xx
+
+act pow2(n)
+    p | 1
+    for i in upto(n)
+        p |= p * 2
+    xx
+    return p
+xx
+
+act upto(n)
+    out | []
+    i | 0
+    while i < n
+        :put_last!(out, i)
+        i |= i + 1
+    xx
+    return out
+xx
+
+HEX | "0123456789abcdef"
+
+act hex_value(s)
+    t | :lower(s)
+    v | 0
+    for ch in :chars(t)
+        d | :find(HEX, :str(ch))
+        if d == nil => return nil
+        v |= v * 16 + d
+    xx
+    return v
+xx
+
+act hex4(n)
+    out | ""
+    v | n
+    for i in upto(4)
+        d | v - idiv(v, 16) * 16
+        out |= HEX[d:d + 1] + out
+        v |= idiv(v, 16)
+    xx
+    return out
+xx
+
+/// The character for a code point. Goblin has no chr, but a JSON \u
+/// escape decodes to one.
+act chr(n)
+    if n < 65536 => return :json_parse("\"\\u" + hex4(n) + "\"")
+    c | n - 65536
+    return :json_parse("\"\\u" + hex4(55296 + idiv(c, 1024)) + "\\u" + hex4(56320 + c - idiv(c, 1024) * 1024) + "\"")
+xx
+
+/// Rails' String#blank?
+act blank(s)
+    if s == nil => return true
+    return :is_matching(:str(s), "^\\s*$")
+xx
+
+/// ---------- HTML text ----------
+
+/// The named character references pages commonly use in meta content.
+ENTITIES | {
+    "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{a0}",
+    "copy": "\u{a9}", "reg": "\u{ae}", "trade": "\u{2122}", "hellip": "\u{2026}",
+    "mdash": "\u{2014}", "ndash": "\u{2013}", "lsquo": "\u{2018}", "rsquo": "\u{2019}",
+    "ldquo": "\u{201c}", "rdquo": "\u{201d}", "laquo": "\u{ab}", "raquo": "\u{bb}",
+    "bull": "\u{2022}", "middot": "\u{b7}", "deg": "\u{b0}", "euro": "\u{20ac}",
+    "pound": "\u{a3}", "yen": "\u{a5}", "cent": "\u{a2}", "sect": "\u{a7}",
+    "para": "\u{b6}", "times": "\u{d7}", "divide": "\u{f7}", "shy": "\u{ad}",
+    "iexcl": "\u{a1}", "iquest": "\u{bf}", "aacute": "\u{e1}", "eacute": "\u{e9}",
+    "iacute": "\u{ed}", "oacute": "\u{f3}", "uacute": "\u{fa}", "agrave": "\u{e0}",
+    "egrave": "\u{e8}", "ograve": "\u{f2}", "ugrave": "\u{f9}", "acirc": "\u{e2}",
+    "ecirc": "\u{ea}", "ocirc": "\u{f4}", "auml": "\u{e4}", "euml": "\u{eb}",
+    "ouml": "\u{f6}", "uuml": "\u{fc}", "ntilde": "\u{f1}", "ccedil": "\u{e7}",
+    "szlig": "\u{df}", "Aacute": "\u{c1}", "Eacute": "\u{c9}", "Ouml": "\u{d6}",
+    "Uuml": "\u{dc}", "Auml": "\u{c4}", "Ntilde": "\u{d1}"
+}
+
+/// Character references decoded, as an HTML parser decodes text and
+/// attribute values: numeric ones, and the common named ones.
+act decode_entities(s)
+    if s == nil => return nil
+    if :has(s, "&") == false => return s
+    out | ""
+    for tok in html::matches(s, "&(#[0-9]+|#[xX][0-9a-fA-F]+|[A-Za-z][A-Za-z0-9]*);?|[^&]+|&")
+        if :starts_with(tok, "&#")
+            body | tok[2:]
+            blen | :len(body)
+            if :ends_with(body, ";") => body |= body[0:blen - 1]
+            n | nil
+            if :starts_with(body, "x") or :starts_with(body, "X")
+                n |= hex_value(body[1:])
+            else
+                n |= :int(body)
+            xx
+            if n == nil or n == 0 or n > 1114111 or (n >= 55296 and n <= 57343) => n |= 65533
+            out |= out + chr(n)
+        elif :starts_with(tok, "&") and :len(tok) > 1
+            name | tok[1:]
+            semi | :ends_with(name, ";")
+            nlen | :len(name)
+            if semi => name |= name[0:nlen - 1]
+            if :has(ENTITIES, name) and (semi or :has(["amp", "lt", "gt", "quot", "nbsp", "copy", "reg"], name))
+                out |= out + ENTITIES[name]
+            else
+                out |= out + tok
+            xx
+        else
+            out |= out + tok
+        xx
+    xx
+    return out
+xx
+
+/// Rails::HTML5::FullSanitizer (strip_tags) followed by the safe-list
+/// sanitize: the text of an HTML fragment -- tags and comments dropped,
+/// the contents of script, style and the like kept as text -- serialized
+/// with &, <, > and no-break spaces escaped.
+act strip_tags(s)
+    if s == nil => return nil
+    text | ""
+    pattern | "(?i)<!--[\\s\\S]*?(?:-->|$)|<script\\b[^>]*>[\\s\\S]*?(?:</script\\s*>|$)|<style\\b[^>]*>[\\s\\S]*?(?:</style\\s*>|$)|<xmp\\b[^>]*>[\\s\\S]*?(?:</xmp\\s*>|$)|<iframe\\b[^>]*>[\\s\\S]*?(?:</iframe\\s*>|$)|<noembed\\b[^>]*>[\\s\\S]*?(?:</noembed\\s*>|$)|<noframes\\b[^>]*>[\\s\\S]*?(?:</noframes\\s*>|$)|<textarea\\b[^>]*>[\\s\\S]*?(?:</textarea\\s*>|$)|<title\\b[^>]*>[\\s\\S]*?(?:</title\\s*>|$)|</?[A-Za-z][^>]*(?:>|$)|<[!?/][^>]*(?:>|$)|[^<]+|<"
+    for tok in html::matches(s, pattern)
+        low | :lower(tok)
+        if :starts_with(tok, "<!--")
+            text |= text
+        elif :is_matching(low, "^<(script|style|xmp|iframe|noembed|noframes|textarea|title)\\b")
+            gt | :find(tok, ">")
+            inner | ""
+            if gt != nil => inner |= tok[gt + 1:]
+            inner |= :update_matching(inner, "(?i)</[a-z]+\\s*>$", "")
+            if :is_matching(low, "^<(textarea|title)") => inner |= decode_entities(inner)
+            text |= text + inner
+        elif :len(tok) > 1 and :starts_with(tok, "<")
+            text |= text
+        else
+            text |= text + decode_entities(tok)
+        xx
+    xx
+    :update_where!(text, "&", "&amp;")
+    :update_where!(text, "<", "&lt;")
+    :update_where!(text, ">", "&gt;")
+    :update_where!(text, "\u{a0}", "&nbsp;")
+    return text
+xx
+
+/// An HTML start tag's attributes as [name, value] pairs, names lowercased
+/// and values decoded; a repeated attribute keeps its first value.
+act tag_attrs(tag)
+    attrs | {}
+    inner | :update_matching(tag, "^<[A-Za-z][A-Za-z0-9]*", "")
+    for p in html::matches(inner, "([^\\s\"'>/=][^\\s\"'>/=]*)(\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s\"'>]+))?")
+        eq | :find(p, "=")
+        k | ""
+        v | ""
+        if eq == nil
+            k |= :lower(p)
+        else
+            k |= :lower(:trim(p[0:eq]))
+            v |= :trim(p[eq + 1:])
+            if :starts_with(v, "\"") or :starts_with(v, "'")
+                v |= v[1:]
+                v |= html::chop(v, 1)
+            xx
+            v |= decode_entities(v)
+        xx
+        if :has(attrs, k) == false => :update!(attrs[k], v)
+    xx
+    return attrs
+xx
+
+/// ---------- Opengraph::Document ----------
+
+ATTRIBUTES | ["title", "url", "image", "description"]
+
+/// Opengraph::Document#opengraph_attributes: og: meta tags, by property
+/// (or name), present content only, the last of a repeated tag winning.
+act opengraph_attributes(page)
+    found | {}
+    if page == nil => return found
+    doc | :update_matching(page, "<!--[\\s\\S]*?-->", "")
+    doc |= :update_matching(doc, "(?i)<script\\b[^>]*>[\\s\\S]*?</script\\s*>", "")
+    doc |= :update_matching(doc, "(?i)<style\\b[^>]*>[\\s\\S]*?</style\\s*>", "")
+    metas | html::matches(doc, "(?i)<meta\\b(?:\"[^\"]*\"|'[^']*'|[^'\">])*>")
+    has_charset | false
+    for tag in metas
+        a | tag_attrs(tag)
+        if :has(a, "charset") => has_charset |= true
+        if :has(a, "http-equiv") and :has(a, "content") and :is_matching(:lower(a["http-equiv"]), "^content-type$") and :is_matching(a["content"], "(?i)charset\\s*=\\s*[\\w-]+") => has_charset |= true
+        prop | nil
+        if :has(a, "property") => prop |= a["property"]
+        nm | nil
+        if :has(a, "name") => nm |= a["name"]
+        selected | (prop != nil and :starts_with(prop, "og:")) or (nm != nil and :starts_with(nm, "og:"))
+        if selected and :has(a, "content") and blank(a["content"]) == false
+            key | nm
+            if prop != nil => key |= prop
+            key |= :str(key)
+            :update_where!(key, "og:", "")
+            if :has(ATTRIBUTES, key) => :update!(found[key], a["content"])
+        xx
+    xx
+    /// sanitize_content: without a declared encoding the content is
+    /// re-encoded from binary, dropping every non-ASCII byte.
+    if has_charset == false
+        for k in :keys(found)
+            :update!(found[k], :update_matching(found[k], "[^\\x00-\\x7F]", ""))
+        xx
+    xx
+    return found
+xx
+
+/// ---------- URLs ----------
+
+/// URI.parse(s) when it gives a URI::HTTP (http or https): its parts, else
+/// nil -- for a string URI cannot parse, another scheme, or no host.
+act parse_url(s)
+    if s == nil or :is_str(s) == false => return nil
+    if :is_matching(s, "^[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]*$") == false => return nil
+    if :has(:update_matching(s, "%[0-9A-Fa-f]{2}", ""), "%") => return nil
+    m | html::matches(s, "^(?i)(https?)://")
+    if :len(m) == 0 => return nil
+    colon_at | :find(s, ":")
+    scheme | :lower(s[0:colon_at])
+    after_scheme | :len(scheme) + 3
+    rest | s[after_scheme:]
+    cut | :len(rest)
+    for ch in ["/", "?", "#"]
+        at | :find(rest, ch)
+        if at != nil and at < cut => cut |= at
+    xx
+    authority | rest[0:cut]
+    target | rest[cut:]
+    userinfo | ""
+    at_sign | nil
+    for i in upto(:len(authority))
+        if authority[i:i + 1] == "@" => at_sign |= i
+    xx
+    if at_sign != nil
+        userinfo |= authority[0:at_sign + 1]
+        authority |= authority[at_sign + 1:]
+    xx
+    host | authority
+    port_part | ""
+    if :starts_with(authority, "[")
+        rb | :find(authority, "]")
+        if rb == nil => return nil
+        host |= authority[0:rb + 1]
+        port_part |= authority[rb + 1:]
+    else
+        colon | :find(authority, ":")
+        if colon != nil
+            host |= authority[0:colon]
+            port_part |= authority[colon:]
+        xx
+    xx
+    port | 80
+    if scheme == "https" => port |= 443
+    if port_part != ""
+        if :is_matching(port_part, "^:[0-9]*$") == false => return nil
+        if :len(port_part) > 1 => port |= :int(port_part[1:])
+    xx
+    if host == "" => return nil
+    bare | host
+    blen | :len(bare)
+    if :starts_with(bare, "[") => bare |= bare[1:blen - 1]
+    return {"url": s, "scheme": scheme, "userinfo": userinfo, "host": host, "bare_host": bare, "port_part": port_part, "port": port, "target": target}
+xx
+
+/// ---------- RestrictedHTTP::PrivateNetworkGuard (surfguard) ----------
+
+DISALLOWED_IPV4 | ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "168.63.129.16/32", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4"]
+
+DISALLOWED_IPV6 | ["::/128", "100::/64", "100:0:0:1::/64", "2001::/32", "2001:2::/48", "2001:db8::/32", "2002::/16", "3fff::/20", "5f00::/16", "fec0::/10", "ff00::/8"]
+
+IANA_ALLOCATED_IPV6_UNICAST | ["2001::/23", "2001:200::/23", "2001:400::/23", "2001:600::/23", "2001:800::/22", "2001:c00::/23", "2001:e00::/23", "2001:1200::/23", "2001:1400::/22", "2001:1800::/23", "2001:1a00::/23", "2001:1c00::/22", "2001:2000::/19", "2001:4000::/23", "2001:4200::/23", "2001:4400::/23", "2001:4600::/23", "2001:4800::/23", "2001:4a00::/23", "2001:4c00::/23", "2001:5000::/20", "2001:8000::/19", "2001:a000::/20", "2001:b000::/20", "2002::/16", "2003::/18", "2400::/12", "2410::/12", "2600::/12", "2610::/23", "2620::/23", "2630::/12", "2800::/12", "2a00::/12", "2a10::/12", "2c00::/12"]
+
+/// A dotted-quad address as one number, nil if it is not one.
+act ipv4_value(s)
+    if :is_matching(s, "^[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}$") == false => return nil
+    v | 0
+    for part in :split(s, ".")
+        n | :int(part)
+        if n > 255 => return nil
+        v |= v * 256 + n
+    xx
+    return v
+xx
+
+/// An IPv6 address as its eight 16-bit groups, nil if it is not one.
+act ipv6_groups(s)
+    if :is_matching(s, "^[0-9A-Fa-f:.]+$") == false => return nil
+    halves | [s]
+    dbl | :find(s, "::")
+    if dbl != nil
+        halves |= [s[0:dbl], s[dbl + 2:]]
+        if :has(halves[1], "::") => return nil
+    xx
+    parts | []
+    for h in halves
+        groups | []
+        if h != ""
+            for piece in :split(h, ":")
+                g | :str(piece)
+                if :has(g, ".")
+                    v4 | ipv4_value(g)
+                    if v4 == nil => return nil
+                    :put_last!(groups, idiv(v4, 65536))
+                    :put_last!(groups, v4 - idiv(v4, 65536) * 65536)
+                else
+                    if :len(g) == 0 or :len(g) > 4 => return nil
+                    hv | hex_value(g)
+                    if hv == nil => return nil
+                    :put_last!(groups, hv)
+                xx
+            xx
+        xx
+        :put_last!(parts, groups)
+    xx
+    if dbl == nil
+        if :len(parts[0]) != 8 => return nil
+        return parts[0]
+    xx
+    missing | 8 - :len(parts[0]) - :len(parts[1])
+    if missing < 1 => return nil
+    out | parts[0]
+    for i in upto(missing)
+        :put_last!(out, 0)
+    xx
+    for g in parts[1]
+        :put_last!(out, g)
+    xx
+    return out
+xx
+
+act in_ipv4(v, cidr)
+    slash | :find(cidr, "/")
+    base | ipv4_value(cidr[0:slash])
+    size | pow2(32 - :int(cidr[slash + 1:]))
+    start | idiv(base, size) * size
+    return v >= start and v < start + size
+xx
+
+act in_ipv6(groups, cidr)
+    slash | :find(cidr, "/")
+    net | ipv6_groups(cidr[0:slash])
+    bits | :int(cidr[slash + 1:])
+    for i in upto(8)
+        if bits <= 0 => return true
+        if bits >= 16
+            if groups[i] != net[i] => return false
+        else
+            d | pow2(16 - bits)
+            if idiv(groups[i], d) != idiv(net[i], d) => return false
+        xx
+        bits |= bits - 16
+    xx
+    return true
+xx
+
+act any_ipv4(v, cidrs)
+    for c in cidrs
+        if in_ipv4(v, c) => return true
+    xx
+    return false
+xx
+
+act any_ipv6(groups, cidrs)
+    for c in cidrs
+        if in_ipv6(groups, c) => return true
+    xx
+    return false
+xx
+
+/// Surfguard.disallowed_ipv4? (IPAddr#private?, loopback? and link_local?
+/// are within the listed ranges)
+act disallowed_ipv4(v)
+    return any_ipv4(v, DISALLOWED_IPV4)
+xx
+
+/// Surfguard.blocked_address? under the default policy
+act blocked_address(addr)
+    v4 | ipv4_value(addr)
+    if v4 != nil => return disallowed_ipv4(v4)
+    g | ipv6_groups(addr)
+    if g == nil => return true
+    if in_ipv6(g, "::ffff:0:0/96") or in_ipv6(g, "::/96") => return true
+    if in_ipv6(g, "64:ff9b:1::/48") => return true
+    if in_ipv6(g, "64:ff9b::/96") or in_ipv6(g, "::ffff:0:0:0/96") => return disallowed_ipv4(g[6] * 65536 + g[7])
+    if in_ipv6(g, "2001:3::/32") or in_ipv6(g, "2001:4:112::/48") => return false
+    if in_ipv6(g, "fc00::/7") or in_ipv6(g, "::1/128") or in_ipv6(g, "fe80::/10") => return true
+    if in_ipv6(g, "2001::/23") => return true
+    if any_ipv6(g, DISALLOWED_IPV6) => return true
+    return any_ipv6(g, IANA_ALLOCATED_IPV6_UNICAST) == false
+xx
+
+/// Surfguard's host syntax check: an IP literal, or LDH labels
+act valid_host(host)
+    if host == "" or :len(host) > 255 or :has(host, "%") => return false
+    if :is_matching(host, "^[\\x21-\\x7E]+$") == false => return false
+    if :has(host, ":") => return ipv6_groups(host) != nil
+    if :is_matching(host, "^[0-9A-Fa-fxX.]+$") and :is_matching(host, "^\\.*(0[xX][0-9A-Fa-f]+|[0-9]+)(\\.(0[xX][0-9A-Fa-f]+|[0-9]+)){0,3}\\.*$") => return true
+    name | host
+    nlen | :len(name)
+    if :ends_with(name, ".") => name |= name[0:nlen - 1]
+    if name == "" => return false
+    for label in :split(name, ".")
+        l | :str(label)
+        if :len(l) == 0 or :len(l) > 63 => return false
+        if :is_matching(l, "^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$") == false => return false
+    xx
+    return true
+xx
+
+act scratch()
+    return "/tmp/campfire-og-" + :str(:secure_random(100000000, 999999999)) + :str(:secure_random(100000000, 999999999))
+xx
+
+act bin_net(args)
+    quoted | []
+    for a in args
+        :put_last!(quoted, multipart::shq(a))
+    xx
+    :run_cmd("bash " + multipart::shq(multipart::root() + "/bin/net") + " " + :join(quoted, " "))
+    return nil
+xx
+
+/// PrivateNetworkGuard.resolve: the first public address (IPv4 before
+/// IPv6), or nil when the host does not resolve or resolves only to
+/// blocked addresses.
+act resolve(host)
+    if valid_host(host) == false => return nil
+    out | scratch()
+    bin_net(["resolve", host, out])
+    if :file_exists(out) == false => return nil
+    listed | :trim(:read_text(out))
+    :delete_path!(out)
+    if listed == "" => return nil
+    v4 | []
+    v6 | []
+    for line in :split(listed, "\n")
+        a | :trim(:str(line))
+        if a != ""
+            if ipv4_value(a) == nil and ipv6_groups(a) == nil => return nil
+            if blocked_address(a) == false
+                if ipv4_value(a) != nil
+                    :put_last!(v4, a)
+                else
+                    :put_last!(v6, a)
+                xx
+            xx
+        xx
+    xx
+    if :len(v4) > 0 => return v4[0]
+    if :len(v6) > 0 => return v6[0]
+    return nil
+xx
+
+/// ---------- Opengraph::Fetch ----------
+
+MAX_REDIRECTS | 10
+
+act read_file(path)
+    if :file_exists(path) == false => return ""
+    return :trim(:read_text(path))
+xx
+
+/// One request, its redirects followed (each target checked and pinned
+/// like the first); the final response, or nil on any failure.
+act request(method, u, ip)
+    url | u
+    addr | ip
+    dir | scratch()
+    for n in upto(MAX_REDIRECTS)
+        out | dir + "/" + :str(n)
+        bin_net(["request", method, url["url"], url["bare_host"], :str(url["port"]), addr, out])
+        meta | :split(read_file(out + "/meta"), "\t")
+        if :len(meta) < 2 or :str(meta[1]) != "0"
+            :run_cmd("rm -rf " + multipart::shq(dir))
+            return nil
+        xx
+        status | :int(meta[0])
+        if status >= 300 and status < 400
+            nxt | parse_url(read_file(out + "/location"))
+            if nxt == nil
+                :run_cmd("rm -rf " + multipart::shq(dir))
+                return nil
+            xx
+            addr |= resolve(nxt["bare_host"])
+            if addr == nil
+                :run_cmd("rm -rf " + multipart::shq(dir))
+                return nil
+            xx
+            url |= nxt
+        else
+            res | {"status": status, "content_type": read_file(out + "/content_type"), "text": nil}
+            if method == "GET" and :file_exists(out + "/text") => :update!(res["text"], :read_text(out + "/text"))
+            :run_cmd("rm -rf " + multipart::shq(dir))
+            return res
+        xx
+    xx
+    :run_cmd("rm -rf " + multipart::shq(dir))
+    return nil
+xx
+
+/// Net::HTTPResponse#content_type
+act media_type(header)
+    if header == nil or header == "" => return nil
+    t | :str(:split(header, ";")[0])
+    slash | :find(t, "/")
+    if slash == nil => return :lower(:trim(t))
+    return :lower(:trim(t[0:slash])) + "/" + :lower(:trim(t[slash + 1:]))
+xx
+
+/// Fetch#fetch_document: the body of a 200 text/html response
+act fetch_document(u, ip)
+    res | request("GET", u, ip)
+    if res == nil or res["status"] != 200 => return nil
+    if media_type(res["content_type"]) != "text/html" => return nil
+    return res["text"]
+xx
+
+/// Fetch#fetch_content_type: the Content-Type header of a HEAD
+act fetch_content_type(u, ip)
+    res | request("HEAD", u, ip)
+    if res == nil => return nil
+    return res["content_type"]
+xx
+
+/// ---------- Opengraph::Location ----------
+
+FILES_AND_MEDIA | "\\bhttps?://\\S+\\.(?:zip|tar|tar\\.gz|tar\\.bz2|tar\\.xz|gz|bz2|rar|7z|dmg|exe|msi|pkg|deb|iso|jpg|jpeg|png|gif|bmp|mp4|mov|avi|mkv|wmv|flv|heic|heif|mp3|wav|ogg|aac|wma|webm|ogv|mpg|mpeg)\\b"
+
+/// Location#valid? -- an http(s) URL whose host resolves to a public
+/// address: {"url": parts, "ip": address}, else nil.
+act location(s)
+    u | parse_url(s)
+    if u == nil => return nil
+    ip | resolve(u["bare_host"])
+    if ip == nil => return nil
+    return {"url": u, "ip": ip}
+xx
+
+/// Location#read_html
+act read_html(s)
+    loc | location(s)
+    if loc == nil or :is_matching(s, FILES_AND_MEDIA) => return nil
+    return fetch_document(loc["url"], loc["ip"])
+xx
+
+/// ---------- Opengraph::Metadata::Fetching ----------
+
+TWITTER_HOSTS | ["twitter.com", "www.twitter.com", "x.com", "www.x.com"]
+ALLOWED_IMAGE_CONTENT_TYPES | ["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+act tweet_url(s)
+    u | parse_url(s)
+    if u == nil or :has(TWITTER_HOSTS, u["host"]) == false => return false
+    path | u["target"]
+    for ch in ["?", "#"]
+        at | :find(path, ch)
+        if at != nil => path |= path[0:at]
+    xx
+    return path != "" and path != "/"
+xx
+
+act fxtwitter_url(s)
+    u | parse_url(s)
+    return u["scheme"] + "://" + u["userinfo"] + "fxtwitter.com" + u["port_part"] + u["target"]
+xx
+
+act valid_image_content_type(image)
+    if blank(image) => return nil
+    loc | location(image)
+    if loc == nil => return nil
+    t | fetch_content_type(loc["url"], loc["ip"])
+    if t == nil or :has(ALLOWED_IMAGE_CONTENT_TYPES, :lower(t)) == false => return nil
+    return image
+xx
+
+/// Opengraph::Metadata.from_url plus its validations: the JSON the
+/// controller renders, or nil when the metadata is invalid (204).
+act from_url(url)
+    page | nil
+    if tweet_url(url)
+        page |= read_html(fxtwitter_url(url))
+    else
+        page |= read_html(url)
+    xx
+    attrs | opengraph_attributes(page)
+    canonical | url
+    if :has(attrs, "url") and location(attrs["url"]) != nil => canonical |= attrs["url"]
+    image | nil
+    if :has(attrs, "image") => image |= valid_image_content_type(attrs["image"])
+    vals | {"url": canonical, "image": image, "title": nil, "description": nil}
+    if :has(attrs, "title") => :update!(vals["title"], strip_tags(attrs["title"]))
+    if :has(attrs, "description") => :update!(vals["description"], strip_tags(attrs["description"]))
+    if blank(vals["title"]) or blank(vals["url"]) or blank(vals["description"]) => return nil
+    /// as_json lists the instance variables in the order they were set:
+    /// the document's attributes, then url and image, then the
+    /// validation state
+    order | []
+    for k in ATTRIBUTES
+        if :has(attrs, k) => :put_last!(order, k)
+    xx
+    if :has(attrs, "url") == false => :put_last!(order, "url")
+    if :has(attrs, "image") == false => :put_last!(order, "image")
+    pairs | []
+    for k in order
+        :put_last!(pairs, [k, vals[k]])
+    xx
+    :put_last!(pairs, ["context_for_validation", {"__ordered_pairs": [["context", nil]]}])
+    :put_last!(pairs, ["errors", {}])
+    return {"__ordered_pairs": pairs}
+xx

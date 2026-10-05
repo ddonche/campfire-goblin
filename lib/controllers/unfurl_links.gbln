@@ -1,0 +1,25 @@
+/// lib/controllers/unfurl_links.gbln -- UnfurlLinksController#create: the
+/// Opengraph metadata of a link pasted into the composer.
+
+import lib/http as http
+import lib/ojson as ojson
+import lib/opengraph as opengraph
+
+/// POST /unfurl_link
+act create(c)
+    params | c["req"]["params"]
+    url | nil
+    if :has(params, "url") => url |= params["url"]
+    /// params.require(:url): ActionController::ParameterMissing
+    if opengraph::blank(url)
+        res | http::response(400, "")
+        :update!(res["headers"]["Content-Type"], "text/html; charset=UTF-8")
+        return res
+    xx
+    metadata | opengraph::from_url(url)
+    if metadata == nil => return http::head(204)
+    /// render json: -- unlike Jbuilder views, without escaping <, > and &
+    res | http::response(200, ojson::encode_value(metadata))
+    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    return res
+xx
