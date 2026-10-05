@@ -72,6 +72,8 @@ act render(c, p)
     if c["req"]["turbo_frame"] != "" and p["frame_layout"] => return render_frame(c, p)
     account | c["account"]
     v | account["v"]
+    logo_href | "/account/logo?v=" + v
+    if v == "" => logo_href |= "/account/logo"
     user_meta | ""
     body_classes | []
     if p["body_class"] != "" => :put_last!(body_classes, p["body_class"])
@@ -122,8 +124,8 @@ act render(c, p)
     <meta name="turbo-prefetch" content="true">
 
     <link rel="manifest" href="/webmanifest.json">
-    <link rel="icon" href="/account/logo?v={v}" type="image/png">
-    <link rel="apple-touch-icon" href="/account/logo?v={v}">
+    <link rel="icon" href="{logo_href}" type="image/png">
+    <link rel="apple-touch-icon" href="{logo_href}">
 
     {assets}
 

@@ -744,3 +744,36 @@ BEGIN
     DELETE FROM webhooks WHERE user_id = p_user;
   END IF;
 END $$;
+
+-- ---------- Onboarding ----------
+-- User.create! with has_secure_password, then grant_membership_to_open_rooms.
+-- NULL when the email address is taken (ActiveRecord::RecordNotUnique).
+CREATE FUNCTION campfire_create_user(p_name text, p_email text, p_password text, p_role int DEFAULT 0)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+  uid bigint;
+BEGIN
+  INSERT INTO users (name, email_address, password_digest, role, status, created_at, updated_at)
+  VALUES (p_name, p_email, CASE WHEN coalesce(p_password, '') <> '' THEN crypt(p_password, gen_salt('bf', 12)) END,
+    p_role, 0, utc_now(), utc_now())
+  RETURNING id INTO uid;
+  PERFORM campfire_grant_open_rooms(uid);
+  RETURN uid;
+EXCEPTION WHEN unique_violation THEN
+  RETURN NULL;
+END $$;
+
+-- FirstRun.create!: the account, its administrator and the first room.
+CREATE FUNCTION campfire_first_run(p_join_code text, p_name text, p_email text, p_password text)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+  uid bigint;
+BEGIN
+  INSERT INTO accounts (name, join_code, created_at, updated_at) VALUES ('Campfire', p_join_code, utc_now(), utc_now());
+  uid := campfire_create_user(p_name, p_email, p_password, 1);
+  IF uid IS NULL THEN RAISE unique_violation; END IF;
+  PERFORM campfire_create_room('Rooms::Open', 'All Talk', uid, ARRAY[uid]);
+  RETURN uid;
+EXCEPTION WHEN unique_violation THEN
+  RETURN NULL;
+END $$;

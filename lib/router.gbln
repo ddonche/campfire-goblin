@@ -11,6 +11,7 @@ import lib/controllers/rooms as rooms
 import lib/controllers/room_admin as room_admin
 import lib/controllers/users as users_ctl
 import lib/controllers/accounts as accounts
+import lib/controllers/onboarding as onboarding
 import lib/controllers/messages as messages
 import lib/controllers/sidebars as sidebars
 import lib/controllers/searches as searches
@@ -82,6 +83,12 @@ act dispatch(c)
     if n == 2 and s[0] == "session" and s[1] == "new" and m == "GET" => return sessions::new(c)
     if n == 1 and s[0] == "session" and m == "POST" => return sessions::create(c)
     if n == 2 and s[0] == "account" and s[1] == "logo" and m == "GET" => return files::logo(c)
+    if n == 1 and s[0] == "first_run" and m == "GET" => return onboarding::first_run(c)
+    if n == 1 and s[0] == "first_run" and m == "POST" => return onboarding::create_first_run(c)
+    if n == 2 and s[0] == "join" and m == "GET" => return onboarding::join(c, s[1])
+    if n == 2 and s[0] == "join" and m == "POST" => return onboarding::create_user(c, s[1])
+    if n == 3 and s[0] == "session" and s[1] == "transfers" and m == "GET" => return onboarding::transfer(c, s[2])
+    if n == 3 and s[0] == "session" and s[1] == "transfers" and (m == "PUT" or m == "PATCH") => return onboarding::update_transfer(c, s[2])
     if n == 1 and (s[0] == "webmanifest" or s[0] == "webmanifest.json") and m == "GET" => return pwa_ctl::manifest(c)
     if n == 1 and (s[0] == "service-worker" or s[0] == "service-worker.js") and m == "GET" => return pwa_ctl::service_worker(c)
 

@@ -1,0 +1,103 @@
+/// lib/views/onboarding.gbln
+/// first_runs/show, users/new (join) and sessions/transfers/show.
+
+import lib/html as html
+import lib/views/sessions as session_views
+
+act field(key, input, icon)
+    tr | html::translation_button(key)
+    img | html::img(icon, "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+    return """      <div class="flex align-center gap">
+        {tr}
+        <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+          {input}
+          {img}
+        </label>
+      </div>
+"""
+xx
+
+/// The nametag form both sign-up pages share; `legend` and the avatar
+/// image differ between them.
+act nametag(legend, upload_label, avatar_img, button_icon)
+    camera | html::img("camera.svg", "aria-hidden=\"true\" ", 0)
+    lanyard | html::img("lanyard.svg", "class=\"nametag__lanyard\" aria-hidden=\"true\" ", 0)
+    name_field | field("user_name", "<input class=\"input\" autocomplete=\"name\" placeholder=\"Name\" autofocus=\"autofocus\" required=\"required\" data-1p-ignore=\"true\" type=\"text\" name=\"user[name]\" id=\"user_name\" />", "person.svg")
+    email_field | field("email_address", "<input class=\"input\" autocomplete=\"username\" placeholder=\"Email address\" required=\"required\" type=\"email\" name=\"user[email_address]\" id=\"user_email_address\" />", "email.svg")
+    password_field | field("password", "<input class=\"input\" autocomplete=\"new-password\" placeholder=\"Password\" required=\"required\" maxlength=\"72\" size=\"72\" type=\"password\" name=\"user[password]\" id=\"user_password\" />", "password.svg")
+    icon | html::img(button_icon, "aria-hidden=\"true\" ", 0)
+    return """
+  <section class="nametag u-relative">
+    <div class="flex justify-center align-center pad-block">
+      {lanyard}
+    </div>
+
+    <div class="nametag__inner flex flex-column gap">
+      <fieldset class="flex flex-column center-block">
+        {legend}
+
+        <label class="align-center center avatar__form gap" data-controller="upload-preview">
+          <div class="btn input--file">
+            {camera}
+            <input class="input" accept="image/*" data-upload-preview-target="input" data-action="upload-preview#previewImage" type="file" name="user[avatar]" id="user_avatar" />
+            <span class="for-screen-reader">{upload_label}</span>
+          </div>
+
+          <div class="btn avatar input--file txt-xx-large">
+            {avatar_img}
+            <span class="for-screen-reader">Avatar</span>
+          </div>
+        </label>
+      </fieldset>
+
+{name_field}
+{email_field}
+{password_field}
+      <button name="button" type="submit" class="btn btn--reversed center txt-large">
+        {icon}
+        <span class="for-screen-reader">Save</span>
+</button>    </div>
+  </section>
+"""
+xx
+
+/// first_runs/show
+act first_run(c)
+    token | html::hidden_token(c["csrf"])
+    avatar | html::img("default-avatar.svg", "aria-hidden=\"true\" data-upload-preview-target=\"image\" alt=\"Add your avatar\" ", 0)
+    tag | nametag("<legend class=\"txt-large txt-align-center\"><strong>Set up Campfire</strong></legend>", "Add your avatar", avatar, "arrow-right.svg")
+    return "\n<form class=\"center max-width\" enctype=\"multipart/form-data\" action=\"/first_run\" accept-charset=\"UTF-8\" method=\"post\">" + token + tag + "</form>"
+xx
+
+act join_nav()
+    keys | html::img("login-keys.svg", "aria-hidden=\"true\" ", 0)
+    return """  <div class="flex-item-justify-end">
+    <a class="btn flex-item-justify-end" href="/session/new">
+      {keys}
+      <span class="for-screen-reader">Sign in</span>
+</a>  </div>
+"""
+xx
+
+/// users/new
+act join(c, code)
+    token | html::hidden_token(c["csrf"])
+    account | c["account"]
+    logo | html::account_logo_tag(account, "")
+    name | html::h(account["name"])
+    legend | """<legend class="txt-align-center flex gap">
+          {logo}
+          <strong class="txt-large">{name}</strong>
+        </legend>"""
+    avatar | html::img("default-avatar.svg", "aria-hidden=\"true\" data-upload-preview-target=\"image\" ", 0)
+    tag | nametag(legend, "Upload avatar", avatar, "check.svg")
+    target_url | "/join/" + html::h(code)
+    return "\n\n<form class=\"center\" enctype=\"multipart/form-data\" action=\"" + target_url + "\" accept-charset=\"UTF-8\" method=\"post\">" + token + tag + "</form>\n" + session_views::help_contact(c) + "\n"
+xx
+
+/// sessions/transfers/show
+act transfer(c, id)
+    token | html::hidden_token(c["csrf"])
+    target | html::h(id)
+    return "<form data-controller=\"auto-submit\" action=\"/session/transfers/{target}\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hidden\" name=\"_method\" value=\"put\" />{token}\n"
+xx

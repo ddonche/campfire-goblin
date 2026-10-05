@@ -92,9 +92,12 @@ act context(req)
             flash |= :json_parse(raw_flash)
         xx
     xx
+    account | data["account"]
+    /// Before the first run there is no account yet.
+    if account == nil => account |= {"id": nil, "name": nil, "join_code": nil, "custom_styles": nil, "settings": {}, "v": "", "has_logo": false}
     return {
         "req": req,
-        "account": data["account"],
+        "account": account,
         "user": user,
         "authenticated_by": by,
         "session_token": token,
