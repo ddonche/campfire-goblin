@@ -8,6 +8,7 @@ import lib/html as html
 import lib/platform as platform
 import lib/controllers/sessions as sessions
 import lib/controllers/rooms as rooms
+import lib/controllers/room_admin as room_admin
 import lib/controllers/messages as messages
 import lib/controllers/sidebars as sidebars
 import lib/controllers/searches as searches
@@ -91,6 +92,32 @@ act dispatch(c)
 
     if n == 0 => return rooms::root(c)
     if n == 3 and s[0] == "users" and s[2] == "avatar" and m == "GET" => return files::avatar(c, s[1])
+
+    if s[0] == "rooms" and n >= 2 and (s[1] == "opens" or s[1] == "closeds" or s[1] == "directs")
+        kind | s[1]
+        if n == 3 and s[2] == "new" and m == "GET"
+            if kind == "opens" => return room_admin::new_open(c)
+            if kind == "closeds" => return room_admin::new_closed(c)
+            return room_admin::new_direct(c)
+        xx
+        if n == 2 and m == "POST"
+            if kind == "opens" => return room_admin::create_open(c)
+            if kind == "closeds" => return room_admin::create_closed(c)
+            return room_admin::create_direct(c)
+        xx
+        if n == 4 and s[3] == "edit" and m == "GET"
+            if kind == "opens" => return room_admin::edit_open(c, s[2])
+            if kind == "closeds" => return room_admin::edit_closed(c, s[2])
+            return room_admin::edit_direct(c, s[2])
+        xx
+        if n == 3 and (m == "PATCH" or m == "PUT")
+            if kind == "opens" => return room_admin::update_open(c, s[2])
+            if kind == "closeds" => return room_admin::update_closed(c, s[2])
+        xx
+        if n == 3 and m == "GET" and kind != "directs" => return room_admin::show(c, s[2])
+        if n == 3 and m == "DELETE" and kind == "directs" => return room_admin::destroy_direct(c, s[2])
+        return not_found(c)
+    xx
 
     if s[0] == "rooms"
         if n == 1 and m == "GET" => return rooms::index(c)

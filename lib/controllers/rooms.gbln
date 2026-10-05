@@ -3,6 +3,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/cable as cable
 import lib/html as html
 import lib/views/layout as layout
 import lib/views/rooms as room_views
@@ -106,9 +107,10 @@ xx
 /// DELETE /rooms/:id
 act destroy(c, id)
     if numeric(id) == false => return not_found_redirect(c)
-    room | db::one("select r.id, r.creator_id, r.type from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [c["user"]["id"], :int(id)])
+    room | db::one("select r.id, r.creator_id, r.type, r.name from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [c["user"]["id"], :int(id)])
     if room == nil => return not_found_redirect(c)
     if auth::can_administer(c, room["creator_id"]) == false => return http::head(403)
     db::exec("select campfire_destroy_room($1)", [room["id"]])
+    cable::broadcast("rooms", cable::stream_tag("remove", "list_" + html::room_key(room), nil))
     return http::redirect(c["req"], "/")
 xx

@@ -1,0 +1,279 @@
+/// lib/views/room_forms.gbln
+/// rooms/{opens,closeds}/{new,edit,_form,_user}, rooms/layouts/{_new,_edit,_form},
+/// rooms/directs/{new,edit} and users/autocompletables/_template.
+
+import lib/html as html
+import lib/views/messages as message_views
+
+FILTER_THRESHOLD | 20
+
+/// link_back_to(path)
+act link_back_to(path)
+    arrow | html::img("arrow-left.svg", "aria-hidden=\"true\" ", 20)
+    return "<a class=\"btn\" href=\"{path}\">{arrow}<span class=\"for-screen-reader\">Go Back</span></a>"
+xx
+
+/// content_for :nav with link_back_to_last_room_visited
+act back_nav(back_room_id)
+    path | "/"
+    if back_room_id != nil => path |= "/rooms/" + :str(back_room_id)
+    link | link_back_to(path)
+    return """  <div class="flex-item-justify-start">
+    {link}
+  </div>
+"""
+xx
+
+act user_filter_search_tag()
+    return "<input type=\"search\" id=\"search\" autocorrect=\"off\" autocomplete=\"off\" data-1p-ignore=\"true\" class=\"input input--transparent full-width\" placeholder=\"Filter…\" data-action=\"input-&gt;filter#filter\" />"
+xx
+
+act menu_tag(block)
+    return "<menu class=\"flex flex-column gap margin-none pad overflow-y constrain-height\" data-controller=\"filter\" data-filter-active-class=\"filter--active\" data-filter-selected-class=\"selected\">" + block + "</menu>"
+xx
+
+act everyone_figure(indent)
+    img | html::img("everyone.svg", "aria-hidden=\"true\" class=\"colorize--black\" style=\"background-color: transparent\" ", 0)
+    return indent + "<figure class=\"avatar flex-item-no-shrink\" style=\"--avatar-border-radius: 0; --avatar-size: 4ch;\">\n" + indent + "  " + img + "\n" + indent + "  <span class=\"for-screen-reader\">Everyone</span>\n" + indent + "</figure>\n\n" + indent + "<div class=\"min-width\">\n" + indent + "  <div class=\"overflow-ellipsis fill-shade\"><strong>Everyone</strong></div>\n" + indent + "</div>\n\n" + indent + "<hr class=\"separator\" aria-hidden=\"true\">\n\n"
+xx
+
+act type_switch(path, checked, label)
+    check | ""
+    if checked => check |= " checked=\"checked\""
+    return """        <a class="btn--faux flex-inline" tabindex="-1" data-turbo-action="replace" href="{path}">
+          <label for="room_type" class="switch">
+            <input type="checkbox" id="room_type" class="switch__input"{check}>
+            <span class="switch__btn round"></span>
+            <span class="for-screen-reader">{label}</span>
+          </label>
+</a>"""
+xx
+
+act user_head(u)
+    value | html::h(:lower(u["name"]))
+    name | html::h(u["name"])
+    avatar | html::avatar_tag(u, "loading=\"lazy\" ")
+    return """<li class="flex align-center gap margin-none" data-value="{value}">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 4ch;">
+    {avatar}
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>{name}</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">
+
+"""
+xx
+
+act check_img(indent)
+    return indent + html::img("check.svg", "class=\"colorize--black flex-item-no-shrink\" aria-hidden=\"true\" ", 20) + "\n"
+xx
+
+/// rooms/opens/_user
+act open_user(u, admin)
+    out | user_head(u)
+    if admin => out |= out + check_img("    ")
+    return out + "</li>\n"
+xx
+
+/// rooms/closeds/_user
+act closed_user(c, u, admin, is_new, selected)
+    out | user_head(u)
+    id | u["id"]
+    if admin
+        if is_new and id == c["user"]["id"]
+            out |= out + "      <input type=\"hidden\" name=\"user_ids[]\" value=\"{id}\" />\n" + check_img("      ")
+        else
+            check | ""
+            if selected => check |= " checked=\"checked\""
+            name | html::h(u["name"])
+            out |= out + """      <label class="switch flex-item-no-shrink">
+        <input type="checkbox" name="user_ids[]" value="{id}" class="switch__input"{check} />
+        <span class="switch__btn round"></span>
+        <span class="for-screen-reader">Give {name} access to this room</span>
+      </label>
+"""
+        xx
+    xx
+    return out + "</li>\n"
+xx
+
+act search_line(count)
+    if count > FILTER_THRESHOLD => return "    " + user_filter_search_tag() + "\n"
+    return "    \n"
+xx
+
+/// rooms/opens/_form's block
+act open_menu(c, users, admin, type_change_path)
+    block | "\n    <li class=\"flex align-center gap margin-none\">\n" + everyone_figure("      ")
+    if admin => block |= block + type_switch(type_change_path, true, "Give only some access to this room")
+    block |= block + "    </li>\n\n    <hr class=\"separator full-width\" style=\"--border-style: solid\">\n\n" + search_line(:len(users)) + "\n    <div data-filter-target=\"list\" contents>\n      "
+    for u in users
+        block |= block + open_user(u, admin)
+    xx
+    block |= block + "\n    </div>\n"
+    return "\n  " + menu_tag(block)
+xx
+
+/// rooms/closeds/_form's block
+act closed_menu(c, selected_users, unselected_users, admin, is_new, type_change_path)
+    block | "\n"
+    if admin
+        block |= block + "      <li class=\"flex align-center gap margin-none\">\n" + everyone_figure("        ") + type_switch(type_change_path, false, "Give everyone access to this room") + "      </li>\n\n      <hr class=\"separator full-width\" style=\"--border-style: solid\">\n"
+    xx
+    block |= block + "\n" + search_line(:len(selected_users) + :len(unselected_users)) + "\n    <div data-filter-target=\"list\" contents>\n      "
+    for u in selected_users
+        block |= block + closed_user(c, u, admin, is_new, true)
+    xx
+    block |= block + "\n\n"
+    if :len(selected_users) > 0 and :len(unselected_users) > 0
+        block |= block + "        <hr class=\"separator full-width\" style=\"--border-style: solid\">\n"
+    xx
+    block |= block + "\n      "
+    for u in unselected_users
+        block |= block + closed_user(c, u, admin, is_new, false)
+    xx
+    block |= block + "\n    </div>\n"
+    return "\n  " + menu_tag(block)
+xx
+
+/// rooms/layouts/_form: `url` is the form's URL, `room` nil for a new room.
+act form(c, room, name, url, admin, access)
+    token | html::hidden_token(c["csrf"])
+    method | ""
+    if room != nil => method |= "<input type=\"hidden\" name=\"_method\" value=\"patch\" />"
+    head | ""
+    if admin
+        tr | html::translation_button("room_name")
+        value | html::h(name)
+        head |= """      {tr}
+
+      <label class="flex-item-grow txt-large">
+        <input name="room[name]" id="room_name" class="input full-width" required="required" autofocus="autofocus" placeholder="Name the room" data-turbo-permanent="true" data-action="keydown.enter-&gt;form#submit:prevent" type="text" value="{value}" />
+        <span class="for-screen-reader">Name this room</span>
+      </label>
+"""
+    else
+        title | html::h(name)
+        head |= """      <h1 class="flex-item-grow txt-x-large">
+        {title}
+      </h1>
+"""
+    xx
+    submit | ""
+    if admin
+        check | html::img("check.svg", "aria-hidden=\"true\" ", 20)
+        submit |= "<button name=\"button\" type=\"submit\" class=\"btn btn--reversed txt-large center\">{check}<span class=\"for-screen-reader\">Save</span></button>"
+    xx
+    return """<form action="{url}" accept-charset="UTF-8" method="post">{method}{token}
+  <div class="flex align-center gap">
+{head}  </div>
+
+  <hr class="margin-block borderless">
+
+  <section class="room-access margin-block pad-inline fill-shade border-radius">
+    {access}
+  </section>
+
+  {submit}
+</form>"""
+xx
+
+/// rooms/layouts/_new
+act new_layout(inner)
+    return "\n\n<section class=\"panel txt-align-center\" style=\"view-transition-name: new-room\">\n  \n  " + inner + "\n\n</section>\n"
+xx
+
+/// button_to_delete_room(room, url:)
+act delete_room_button(c, room, url)
+    label | html::h(room["name"])
+    display | html::h(message_views::room_name(room, c["user"]["id"]))
+    trash | html::img("trash.svg", "aria-hidden=\"true\" ", 20)
+    inner | trash + "<span class=\"overflow-ellipsis\">{display}</span>"
+    return html::button_to(url, "delete", "", " class=\"btn btn--negative max-width\" aria-label=\"Delete {label}\" data-turbo-confirm=\"Are you sure you want to delete this room and all messages in it? This can’t be undone.\"", inner, c["csrf"])
+xx
+
+/// rooms/layouts/_edit
+act edit_layout(c, room, admin, inner)
+    id | room["id"]
+    out | "\n\n<section class=\"panel txt-align-center\" style=\"view-transition-name: edit-room-{id}\">\n  \n  " + inner + "\n\n</section>\n\n"
+    if admin
+        button | delete_room_button(c, room, c["req"]["base"] + "/rooms/" + :str(id))
+        out |= out + "  <section class=\"panel txt-align-center\">\n    " + button + "\n  </section>\n"
+    xx
+    return out
+xx
+
+/// users/autocompletables/_template
+act autocompletable_template()
+    remove | html::img("remove-circle.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 0)
+    return """<template id="autocompletable-user">
+  <div class="autocomplete__pill max-width" data-value="" tabindex="0">
+    <img class="avatar flex-item-no-shrink" data-content="avatar" src="" />
+    <span class="autocomplete-field__selected-value-text overflow-ellipsis flex-item-grow" data-content="label"></span>
+
+    <button type="button" data-action="autocomplete#remove:prevent" data-value="" tabindex="-1" class="btn btn--plain txt-small translucent flex-item-no-shrink">
+      {remove}
+      <span class="for-screen-reader">Remove <span data-content="screenReaderLabel"></span></span>
+    </button>
+  </div>
+</template>
+"""
+xx
+
+/// rooms/directs/new
+act direct_new(c)
+    token | html::hidden_token(c["csrf"])
+    arrow | html::img("arrow-left.svg", "aria-hidden=\"true\" ", 0)
+    check | html::img("check.svg", "aria-hidden=\"true\" ", 0)
+    template | autocompletable_template()
+    return """<turbo-frame id="direct_rooms_control" target="_top">
+  <div class="directs directs--new flex flex-column gap">
+    <form class="flex gap flex-item-grow" data-controller="form" data-action="keydown.esc-&gt;form#cancel" action="/rooms/directs" accept-charset="UTF-8" method="post">{token}
+      <a class="btn flex-item-no-shrink" data-turbo-frame="user_sidebar" data-form-target="cancel" href="/users/me/sidebar">
+        {arrow}
+        <span class="for-screen-reader">Cancel changes</span>
+</a>
+      <section class="autocomplete__container unpad input input--actor">
+        <div class="autocomplete__input input flex flex-wrap position-relative flex-item-grow"
+            data-controller="autocomplete" data-autocomplete-url-value="/autocompletable/users">
+          <select name="user_ids[]" data-autocomplete-target="select" data-template-id="autocompletable-user" multiple="true" hidden required></select>
+
+          {template}
+
+          <input autocomplete="off" autocorrect="off" data-1p-ignore="true" class="autocomplete__input input flex flex-wrap position-relative" data-autocomplete-target="input" data-action="input-&gt;autocomplete#search keydown-&gt;autocomplete#didPressKey" type="text" name="rooms_direct[user_ids_input]" id="rooms_direct_user_ids_input" />
+        </div>
+      </section>
+
+      <button name="button" type="submit" class="btn btn--reversed flex-item-no-shrink">
+        {check}
+        <span class="for-screen-reader">Start Ping</span>
+</button></form>
+    <span class="txt-small translucent pad-inline-half center">Type names to ping someone…</span>
+  </div>
+</turbo-frame>
+"""
+xx
+
+/// rooms/directs/edit
+act direct_edit(c, room, users)
+    members | ""
+    for u in users
+        avatar | html::avatar_tag(u, "loading=\"lazy\" ")
+        name | html::h(u["name"])
+        members |= members + """      <div class="member flex flex-column gap fill-shade pad border-radius">
+        <figure class="avatar center" style="--avatar-border-radius: 10ch; --avatar-size: 10ch;" >
+          {avatar}
+        </figure>
+
+        <strong>{name}</strong>
+      </div>
+"""
+    xx
+    trash | html::img("trash.svg", "aria-hidden=\"true\" ", 0)
+    url | c["req"]["base"] + "/rooms/directs/" + :str(room["id"])
+    button | html::button_to(url, "delete", "", " class=\"btn btn--negative center\" aria-label=\"Delete Ping\" data-turbo-confirm=\"Are you sure you want to delete this ping and all messages in it? This can’t be undone.\"", "\n    {trash}\n    Ping\n", c["csrf"])
+    return "\n\n<div class=\"panel txt-align-center\">\n  <section class=\"directs--edit margin-block-end\">\n" + members + "  </section>\n\n  " + button + "</div>\n"
+xx

@@ -559,3 +559,83 @@ CREATE FUNCTION campfire_mentions(body text) RETURNS json LANGUAGE sql STABLE AS
   FROM (SELECT DISTINCT (regexp_matches(body, 'sgid="([^"]+)"', 'g'))[1] AS sgid) x
   JOIN users u ON u.id = substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint
 $$;
+
+-- ---------- Rooms ----------
+-- memberships.grant_to: Membership.insert_all, which skips users who already
+-- belong to the room. Users go in id order, as User.where(...) returns them.
+CREATE FUNCTION campfire_grant(p_room bigint, p_users bigint[]) RETURNS void LANGUAGE sql AS $$
+  INSERT INTO memberships (room_id, user_id, involvement, created_at, updated_at)
+  SELECT p_room, u.id, CASE WHEN r.type = 'Rooms::Direct' THEN 'everything' ELSE 'mentions' END, utc_now(), utc_now()
+  FROM users u, rooms r WHERE r.id = p_room AND u.id = ANY(p_users)
+  ORDER BY u.id
+  ON CONFLICT (room_id, user_id) DO NOTHING;
+$$;
+
+-- Rooms::Open#grant_access_to_all_users, after its type became Rooms::Open.
+CREATE FUNCTION campfire_grant_all_active(p_room bigint) RETURNS void LANGUAGE sql AS $$
+  SELECT campfire_grant(p_room, (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM users WHERE status = 0));
+$$;
+
+-- Room.create_for(attributes, users:), plus Rooms::Open's grant to everyone.
+CREATE FUNCTION campfire_create_room(p_type text, p_name text, p_creator bigint, p_users bigint[])
+RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  r rooms;
+BEGIN
+  INSERT INTO rooms (type, name, creator_id, created_at, updated_at)
+  VALUES (p_type, p_name, p_creator, utc_now(), utc_now()) RETURNING * INTO r;
+  PERFORM campfire_grant(r.id, p_users);
+  IF p_type = 'Rooms::Open' THEN PERFORM campfire_grant_all_active(r.id); END IF;
+  RETURN campfire_room_json(r);
+END $$;
+
+-- Room#update!(name:) after becomes!(type); Rooms::Open grants everyone when
+-- the type changed to it. Closed rooms then revise their memberships:
+-- p_users (NULL for open rooms) are the grantees, everyone else is revoked.
+CREATE FUNCTION campfire_update_room(p_room bigint, p_type text, p_name text, p_users bigint[])
+RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  was rooms;
+  r rooms;
+BEGIN
+  SELECT * INTO was FROM rooms WHERE id = p_room;
+  UPDATE rooms SET type = p_type, name = p_name,
+    updated_at = CASE WHEN type IS DISTINCT FROM p_type OR name IS DISTINCT FROM p_name THEN utc_now() ELSE updated_at END
+  WHERE id = p_room RETURNING * INTO r;
+  IF p_type = 'Rooms::Open' AND was.type <> 'Rooms::Open' THEN PERFORM campfire_grant_all_active(p_room); END IF;
+  IF p_users IS NOT NULL THEN
+    PERFORM campfire_grant(p_room, p_users);
+    DELETE FROM memberships WHERE room_id = p_room AND NOT (user_id = ANY(p_users));
+  END IF;
+  RETURN campfire_room_json(r);
+END $$;
+
+-- Rooms::Direct.find_or_create_for(users): the first direct room whose
+-- members are exactly these users, else a new one.
+CREATE FUNCTION campfire_find_or_create_direct(p_creator bigint, p_users bigint[])
+RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  wanted bigint[] := (SELECT coalesce(array_agg(id ORDER BY id), '{}') FROM users WHERE id = ANY(p_users));
+  found bigint;
+BEGIN
+  SELECT r.id INTO found FROM rooms r
+  WHERE r.type = 'Rooms::Direct'
+    AND (SELECT array_agg(user_id ORDER BY user_id) FROM memberships WHERE room_id = r.id) = wanted
+  ORDER BY r.id LIMIT 1;
+  IF found IS NOT NULL THEN
+    RETURN json_build_object('created', false, 'room', (SELECT campfire_room_json(r) FROM rooms r WHERE r.id = found));
+  END IF;
+  RETURN json_build_object('created', true, 'room', campfire_create_room('Rooms::Direct', NULL, p_creator, wanted));
+END $$;
+
+-- Room#destroy: memberships go with delete_all, messages one by one.
+CREATE FUNCTION campfire_destroy_room(p_room bigint) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  mid bigint;
+BEGIN
+  DELETE FROM memberships WHERE room_id = p_room;
+  FOR mid IN SELECT id FROM messages WHERE room_id = p_room LOOP
+    PERFORM campfire_destroy_message(mid);
+  END LOOP;
+  DELETE FROM rooms WHERE id = p_room;
+END $$;
