@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Starts the Goblin port: goblin-host on GOBLIN_PORT behind nginx on PORT.
+#   PORT=3002 GOBLIN_PORT=3102 DATABASE_URL=postgres://... bin/server
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT=$(pwd)
+PORT=${PORT:-3002}
+GOBLIN_PORT=${GOBLIN_PORT:-3102}
+export DATABASE_URL=${DATABASE_URL:-postgres://postgres@127.0.0.1:5433/campfire}
+export GOBLIN_DOCROOT="$ROOT/app"
+
+mkdir -p tmp/log tmp/nginx
+sed -e "s|@ROOT@|$ROOT|g" -e "s|@PORT@|$PORT|g" -e "s|@GOBLIN_PORT@|$GOBLIN_PORT|g" config/nginx.conf > tmp/nginx.conf
+
+# goblin-host runs each request as a `goblin` process in this directory, so
+# module imports (lib/...) resolve from the repository root.
+goblin start --host 127.0.0.1 --port "$GOBLIN_PORT" > tmp/log/goblin.log 2>&1 &
+GOBLIN_PID=$!
+trap 'kill $GOBLIN_PID 2>/dev/null || true' EXIT
+
+echo "Campfire (Goblin) on http://127.0.0.1:$PORT"
+nginx -c "$ROOT/tmp/nginx.conf" -p "$ROOT/tmp"

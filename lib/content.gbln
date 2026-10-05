@@ -611,3 +611,29 @@ act attachment(c, m, att)
     icon | html::img("common-file-text.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
     return "<div class=\"attachment\"><a class=\"btn btn--plain\" href=\"{path}?disposition=attachment\">{icon}<span>{name}</span></a></div>"
 xx
+
+/// ---------- storing ----------
+
+ATTACHMENT_ATTRS | {"sgid": 1, "content-type": 1, "url": 1, "href": 1, "filename": 1, "filesize": 1, "width": 1, "height": 1, "previewable": 1, "presentation": 1, "caption": 1, "content": 1}
+
+act canonical_tree(node)
+    kept | []
+    for k in node["kids"]
+        if k["t"] == "el" and k["name"] == "action-text-attachment"
+            :update!(k["attrs"], scrub_attrs(k["attrs"], ATTACHMENT_ATTRS))
+            :update!(k["kids"], [])
+        elif k["t"] == "el"
+            k |= canonical_tree(k)
+        xx
+        :put_last!(kept, k)
+    xx
+    :update!(node["kids"], kept)
+    return node
+xx
+
+/// ActionText::Content's canonical form, as stored: attachments keep only
+/// their attachment attributes and lose their rendered content.
+act canonicalize(html)
+    if :has(html, "action-text-attachment") == false => return html
+    return serialize(canonical_tree(parse(html)))
+xx

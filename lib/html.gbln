@@ -39,7 +39,10 @@ act local_time(iso, style, klass)
     return "<time class=\"{klass}\" datetime=\"{iso}\" data-local-time-target=\"{style}\"></time>"
 xx
 
+/// Forms rendered for Turbo Stream responses and broadcasts carry no token
+/// (Turbo sends X-CSRF-Token from the page's meta tag), signalled by nil.
 act hidden_token(token)
+    if token == nil => return ""
     return "<input type=\"hidden\" name=\"authenticity_token\" value=\"{token}\" />"
 xx
 
@@ -64,19 +67,19 @@ act room_key(room)
 xx
 
 /// Array#to_sentence
-act to_sentence(items, two_words)
-    n | :len(items)
+act to_sentence(phrases, two_words)
+    n | :len(phrases)
     if n == 0 => return ""
-    if n == 1 => return items[0]
-    if n == 2 => return items[0] + two_words + items[1]
+    if n == 1 => return phrases[0]
+    if n == 2 => return phrases[0] + two_words + phrases[1]
     out | ""
     i | 0
     while i < n - 1
         if i > 0 => out |= out + ", "
-        out |= out + items[i]
+        out |= out + phrases[i]
         i |= i + 1
     xx
-    return out + ", and " + items[n - 1]
+    return out + ", and " + phrases[n - 1]
 xx
 
 act capitalize(s)

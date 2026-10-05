@@ -316,3 +316,181 @@ CREATE FUNCTION campfire_message_json(m messages) RETURNS json LANGUAGE sql STAB
                    WHERE a.record_type = 'Message' AND a.record_id = m.id AND a.name = 'attachment'))
   FROM (SELECT (SELECT body FROM action_text_rich_texts WHERE record_type = 'Message' AND record_id = m.id AND name = 'body') AS body) rt
 $$;
+
+-- Message.create! with its callbacks: the rich text body, touching the room,
+-- Room#receive's unread marks, and the search index row. Returns the
+-- message as campfire_message_json and the room's member ids for the
+-- unread-room fan-out.
+CREATE FUNCTION campfire_create_message(p_creator bigint, p_room bigint, p_body text, p_client text, p_plain text)
+RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  m messages;
+  ts timestamp := utc_now();
+BEGIN
+  INSERT INTO messages (client_message_id, created_at, creator_id, room_id, updated_at)
+  VALUES (coalesce(nullif(p_client, ''), gen_random_uuid()::text), ts, p_creator, p_room, ts)
+  RETURNING * INTO m;
+  IF p_body IS NOT NULL THEN
+    INSERT INTO action_text_rich_texts (body, created_at, name, record_id, record_type, updated_at)
+    VALUES (p_body, ts, 'body', m.id, 'Message', ts);
+  END IF;
+  UPDATE rooms SET updated_at = ts WHERE id = p_room;
+  UPDATE memberships SET unread_at = m.created_at, updated_at = ts
+  WHERE room_id = p_room AND involvement <> 'invisible' AND user_id <> p_creator
+    AND (connected_at IS NULL OR connected_at < ts - interval '60 seconds');
+  INSERT INTO message_search_index (rowid, body) VALUES (m.id, coalesce(p_plain, ''));
+  RETURN json_build_object(
+    'message', campfire_message_json(m),
+    'member_ids', (SELECT coalesce(json_agg(user_id ORDER BY id), '[]') FROM memberships WHERE room_id = p_room));
+END $$;
+
+-- ---------- ActionCable over long polling ----------
+-- The stream an ActionCable subscription identifier streams from for a user,
+-- applying each channel's `subscribed` authorization: '' for a channel that
+-- streams nothing (HeartbeatChannel), NULL for a rejected subscription.
+CREATE FUNCTION campfire_cable_stream(p_user bigint, p_identifier text)
+RETURNS text LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  ident json;
+  channel text;
+  name text;
+  gid text;
+  room rooms;
+BEGIN
+  BEGIN
+    ident := p_identifier::json;
+    channel := ident->>'channel';
+  EXCEPTION WHEN others THEN
+    RETURN NULL;
+  END;
+
+  IF channel IN ('Turbo::StreamsChannel', 'RoomMessagesChannel') THEN
+    BEGIN
+      name := campfire_verify(ident->>'signed_stream_name', 'turbo')::json #>> '{}';
+    EXCEPTION WHEN others THEN
+      RETURN NULL;
+    END;
+    IF name IS NULL THEN RETURN NULL; END IF;
+    -- RoomMessagesChannel.guarded_stream?: the part after the first colon is "messages"
+    IF channel = 'Turbo::StreamsChannel' THEN
+      RETURN CASE WHEN position(':' IN name) > 0 AND substr(name, position(':' IN name) + 1) = 'messages' THEN NULL ELSE name END;
+    END IF;
+    IF position(':' IN name) = 0 OR substr(name, position(':' IN name) + 1) <> 'messages' THEN RETURN NULL; END IF;
+    BEGIN
+      gid := campfire_unb64(split_part(name, ':', 1));
+    EXCEPTION WHEN others THEN
+      RETURN NULL;
+    END;
+    SELECT r.* INTO room FROM rooms r JOIN memberships m ON m.room_id = r.id AND m.user_id = p_user
+    WHERE gid ~ '^gid://campfire/(Room|Rooms::Open|Rooms::Closed|Rooms::Direct)/[0-9]+$'
+      AND r.id = substring(gid FROM '([0-9]+)$')::bigint;
+    RETURN CASE WHEN room.id IS NULL THEN NULL ELSE name END;
+  END IF;
+
+  IF channel IN ('PresenceChannel', 'TypingNotificationsChannel') THEN
+    IF coalesce(ident->>'room_id', '') !~ '^[0-9]+$' THEN RETURN NULL; END IF;
+    SELECT r.* INTO room FROM rooms r JOIN memberships m ON m.room_id = r.id AND m.user_id = p_user
+    WHERE r.id = (ident->>'room_id')::bigint;
+    IF room.id IS NULL THEN RETURN NULL; END IF;
+    -- stream_for @room: "<channel_name>:<room gid param>"
+    RETURN CASE channel WHEN 'PresenceChannel' THEN 'presence' ELSE 'typing_notifications' END
+      || ':' || campfire_gid_param(room.type, room.id);
+  END IF;
+
+  RETURN CASE channel
+    WHEN 'HeartbeatChannel' THEN ''
+    WHEN 'ReadRoomsChannel' THEN 'user_' || p_user || '_reads'
+    WHEN 'UnreadRoomsChannel' THEN 'user_' || p_user || '_unreads'
+  END;
+END $$;
+
+-- Membership::Connectable, as PresenceChannel calls it. p_action is
+-- present, absent or refresh.
+CREATE FUNCTION campfire_presence(p_user bigint, p_room bigint, p_action text)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  mb memberships;
+  ts timestamp := utc_now();
+  connected boolean;
+BEGIN
+  SELECT * INTO mb FROM memberships WHERE user_id = p_user AND room_id = p_room;
+  IF mb.id IS NULL THEN RETURN; END IF;
+  connected := mb.connected_at IS NOT NULL AND mb.connected_at >= ts - interval '60 seconds';
+  IF p_action = 'present' THEN
+    UPDATE memberships SET connections = CASE WHEN connected THEN mb.connections + 1 ELSE 1 END,
+      connected_at = ts, unread_at = NULL WHERE id = mb.id;
+    INSERT INTO cable_broadcasts (stream, payload)
+    VALUES ('user_' || p_user || '_reads', json_build_object('room_id', p_room)::text);
+  ELSIF p_action = 'absent' THEN
+    UPDATE memberships SET connections = CASE WHEN connected THEN mb.connections - 1 ELSE 0 END, updated_at = ts
+    WHERE id = mb.id;
+    UPDATE memberships SET connected_at = NULL WHERE id = mb.id AND connections < 1;
+  ELSIF p_action = 'refresh' THEN
+    UPDATE memberships SET connections = CASE WHEN connected THEN mb.connections ELSE mb.connections + 1 END,
+      connected_at = ts, updated_at = ts WHERE id = mb.id;
+  END IF;
+END $$;
+
+-- Waits up to p_wait_ms for broadcasts on the given streams. p_subs is
+-- [{"stream": ..., "since": id}, ...]; returns [{"i": index, "id": id, "payload": json}].
+CREATE FUNCTION campfire_cable_poll(p_subs json, p_wait_ms int)
+RETURNS json LANGUAGE plpgsql VOLATILE AS $$
+DECLARE
+  result json;
+  deadline timestamptz := clock_timestamp() + make_interval(secs => p_wait_ms / 1000.0);
+BEGIN
+  LOOP
+    SELECT json_agg(json_build_object('i', s.i - 1, 'id', b.id, 'payload', b.payload::json) ORDER BY b.id) INTO result
+    FROM json_array_elements(p_subs) WITH ORDINALITY AS s(sub, i)
+    JOIN cable_broadcasts b ON b.stream = s.sub->>'stream' AND b.id > (s.sub->>'since')::bigint;
+    IF result IS NOT NULL OR clock_timestamp() >= deadline THEN
+      RETURN coalesce(result, '[]'::json);
+    END IF;
+    PERFORM pg_sleep(0.1);
+  END LOOP;
+END $$;
+
+CREATE FUNCTION campfire_cable_cursor() RETURNS bigint LANGUAGE sql STABLE AS $$
+  SELECT coalesce(max(id), 0) FROM cable_broadcasts
+$$;
+
+-- Zlib.crc32, for Users::AvatarsHelper#avatar_background_color.
+CREATE FUNCTION campfire_crc32(data text) RETURNS bigint LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  bytes bytea := convert_to(data, 'UTF8');
+  crc bigint := 4294967295;
+BEGIN
+  FOR i IN 0 .. length(bytes) - 1 LOOP
+    crc := crc # get_byte(bytes, i);
+    FOR j IN 1 .. 8 LOOP
+      crc := CASE WHEN crc & 1 = 1 THEN (crc >> 1) # 3988292384 ELSE crc >> 1 END;
+    END LOOP;
+  END LOOP;
+  RETURN crc # 4294967295;
+END $$;
+
+-- User.from_avatar_token: find_signed!(token, purpose: :avatar)
+CREATE FUNCTION campfire_user_from_avatar_token(token text) RETURNS bigint LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  payload json;
+BEGIN
+  payload := campfire_verify(token, 'signed_id')::json;
+  IF payload->'_rails'->>'pur' IS DISTINCT FROM 'user/avatar' THEN RETURN NULL; END IF;
+  RETURN (SELECT id FROM users WHERE id = (payload->'_rails'->>'data')::bigint);
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END $$;
+
+-- The stored file (relative to storage/) for an account logo or user avatar
+-- variant, when one has been uploaded; see lib/storage.gbln.
+CREATE FUNCTION campfire_logo_file(small boolean) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT b.key || CASE WHEN small THEN '-small' ELSE '-large' END || '.png'
+  FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id = a.blob_id
+  WHERE a.record_type = 'Account' AND a.name = 'logo' ORDER BY a.id DESC LIMIT 1
+$$;
+
+CREATE FUNCTION campfire_avatar_file(user_id bigint) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT b.key || '-square.webp'
+  FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id = a.blob_id
+  WHERE a.record_type = 'User' AND a.name = 'avatar' AND a.record_id = user_id ORDER BY a.id DESC LIMIT 1
+$$;

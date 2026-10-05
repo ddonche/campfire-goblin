@@ -1,10 +1,17 @@
 #!/bin/bash
 # Runs one request through the app without a server, for debugging:
 #   bin/request GET /rooms/1 [cookie-header] [body]
+# CONTENT_TYPE, ACCEPT and HEADERS (a JSON object of extra headers) are
+# taken from the environment when set.
 cd "$(dirname "$0")/.."
 export GOBLIN_NONINTERACTIVE=1 GOBLIN_METHOD="$1" GOBLIN_PATH=/api/app
 export DATABASE_URL="${DATABASE_URL:-postgres://postgres@127.0.0.1:5433/campfire}"
-uri="$2"
-export GOBLIN_HEADERS_JSON=$(python3 -c 'import json,sys; print(json.dumps({"x-request-uri": sys.argv[1], "host": "127.0.0.1:3001", "cookie": sys.argv[2], "user-agent": "Ruby", "content-type": "application/x-www-form-urlencoded"}))' "$uri" "$3")
+export GOBLIN_HEADERS_JSON=$(python3 -c '
+import json, os, sys
+h = {"x-request-uri": sys.argv[1], "host": "127.0.0.1:3001", "cookie": sys.argv[2], "user-agent": "Ruby",
+     "content-type": os.environ.get("CONTENT_TYPE", "application/x-www-form-urlencoded")}
+if os.environ.get("ACCEPT"): h["accept"] = os.environ["ACCEPT"]
+h.update(json.loads(os.environ.get("HEADERS") or "{}"))
+print(json.dumps(h))' "$2" "$3")
 if [ -n "$4" ]; then f=$(mktemp); printf '%s' "$4" > "$f"; export GOBLIN_REQUEST_FILE="$f"; fi
 exec ${GOBLIN:-goblin} app/api/app.gbln

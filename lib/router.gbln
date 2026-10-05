@@ -11,6 +11,8 @@ import lib/controllers/rooms as rooms
 import lib/controllers/messages as messages
 import lib/controllers/sidebars as sidebars
 import lib/controllers/searches as searches
+import lib/controllers/cable as cable_endpoint
+import lib/controllers/files as files
 
 
 act not_found(c)
@@ -57,6 +59,10 @@ act dispatch(c)
         return http::html("<!DOCTYPE html><html><body style=\"background-color: green\"></body></html>")
     xx
 
+    /// ActionCable's mount point: authenticated by the session cookie and an
+    /// origin check, outside ApplicationController's before_actions.
+    if n == 1 and s[0] == "cable" and m == "POST" => return cable_endpoint::handle(c)
+
     p | platform::parse(req["user_agent"])
     if platform::allowed(p) == false => return http::text(406, "Your browser is not supported. Please upgrade.")
 
@@ -69,6 +75,7 @@ act dispatch(c)
     /// ---- routes that allow unauthenticated access ----
     if n == 2 and s[0] == "session" and s[1] == "new" and m == "GET" => return sessions::new(c)
     if n == 1 and s[0] == "session" and m == "POST" => return sessions::create(c)
+    if n == 2 and s[0] == "account" and s[1] == "logo" and m == "GET" => return files::logo(c)
 
     /// ---- everything else requires a signed-in user ----
     if auth::signed_in(c) == false => return request_authentication(c)
@@ -78,6 +85,7 @@ act dispatch(c)
     if n == 1 and s[0] == "session" and m == "DELETE" => return sessions::destroy(c)
 
     if n == 0 => return rooms::root(c)
+    if n == 3 and s[0] == "users" and s[2] == "avatar" and m == "GET" => return files::avatar(c, s[1])
 
     if s[0] == "rooms"
         if n == 1 and m == "GET" => return rooms::index(c)

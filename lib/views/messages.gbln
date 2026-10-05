@@ -40,7 +40,7 @@ act boost(c, b, message_id)
     klass | "txt-small"
     if content::all_emoji(b["content"]) => klass |= "txt-small txt-medium"
     minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
-    token | c["csrf"]
+    token | html::hidden_token(c["csrf"])
     return """  <div id="boost_{bid}"
       class="boost boost-item flex-inline postion--relative max-width align-center fill-white gap"
       data-controller="boost-delete" data-boost-delete-perform-class="boost--deleting" data-boost-delete-reveal-class="expanded" data-boost-delete-booster-id-value="{booster_id}">
@@ -53,7 +53,7 @@ act boost(c, b, message_id)
     <form class="button_to" method="post" action="/messages/{message_id}/boosts/{bid}"><input type="hidden" name="_method" value="delete" /><button data-action="boost-delete#perform" data-boost-delete-target="button" class="btn btn--negative flex-item-justify-end boost__delete" type="submit">
       {minus}
       <span class="for-screen-reader">Delete this boost</span>
-</button><input type="hidden" name="authenticity_token" value="{token}" /></form>  </div>
+</button>{token}</form>  </div>
   <span id="delete_boost_accessible_label" class="for-screen-reader">Press enter to delete this boost</span>
 """
 xx
@@ -101,13 +101,13 @@ act actions(c, m, url)
     edit | dom(m, "edit")
     id | m["id"]
     room_id | m["room_id"]
-    token | c["csrf"]
+    token | html::hidden_token(c["csrf"])
     dots | html::img("menu-dots-horizontal.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
     forms | []
     for r in REACTIONS
         ch | r[0]
         title | r[1]
-        :put_last!(forms, """<form data-turbo-frame="{boosting}" data-action="popup#close" action="/messages/{id}/boosts" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="{token}" />
+        :put_last!(forms, """<form data-turbo-frame="{boosting}" data-action="popup#close" action="/messages/{id}/boosts" accept-charset="UTF-8" method="post">{token}
             <input type="hidden" name="boost[content]" id="boost_content" value="{ch}" />
             <button name="button" type="submit" title="{title}" class="btn message__action-btn" data-emoji="{ch}">
               <figure class="margin-none boost-character">{ch}</figure>
@@ -270,4 +270,12 @@ act template(c)
   </div>
 </script>
 """
+xx
+
+/// render @message: the partial alone starts on a new line and ends at the
+/// closing tag.
+act single(c, m)
+    out | message(c, m)
+    if :ends_with(out, "\n") => out |= html::chop(out, 1)
+    return "\n" + out
 xx

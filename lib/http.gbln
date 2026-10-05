@@ -357,6 +357,17 @@ act set_permanent_cookie(res, name, value, httponly)
     return add_cookie(res, name, url_encode(value), attrs + "; samesite=lax")
 xx
 
+/// send_file: nginx streams the file named by X-Accel-Redirect (see
+/// config/nginx.conf) with the headers set here. `path` is under /_send/.
+act send_file(path, content_type, filename, cache_control)
+    res | response(200, "")
+    :update!(res["headers"]["Content-Type"], content_type)
+    :update!(res["headers"]["Content-Disposition"], "inline; filename=\"" + filename + "\"; filename*=UTF-8''" + url_encode(filename))
+    :update!(res["headers"]["Cache-Control"], cache_control)
+    :update!(res["headers"]["X-Accel-Redirect"], path)
+    return res
+xx
+
 act delete_cookie(res, name)
     return add_cookie(res, name, "", "; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
 xx

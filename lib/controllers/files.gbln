@@ -1,0 +1,70 @@
+/// lib/controllers/files.gbln -- Accounts::LogosController#show and
+/// Users::AvatarsController#show: images, sent through nginx (send_file).
+
+import lib/http as http
+import lib/db as db
+import lib/html as html
+
+AVATAR_COLORS | ["#AF2E1B", "#CC6324", "#3B4B59", "#BFA07A", "#ED8008", "#ED3F1C", "#BF1B1B", "#736B1E", "#D07B53", "#736356", "#AD1D1D", "#BF7C2A", "#C09C6F", "#698F9C", "#7C956B", "#5D618F", "#3B3633", "#67695E"]
+
+/// An asset under public/assets, by its logical name, for send_file.
+act asset_file(name)
+    return "/_send" + html::asset(name)
+xx
+
+/// GET /account/logo
+act logo(c)
+    req | c["req"]
+    small | http::param(req, "size") == "small"
+    cache | "max-age=300, public, stale-while-revalidate=604800"
+    variant | db::value("select campfire_logo_file($1) as v", [small])
+    if variant != nil => return http::send_file("/_send/storage/" + variant, "image/png", "logo.png", cache)
+    if small => return http::send_file(asset_file("logos/app-icon-192.png"), "image/png", "app-icon-192.png", cache)
+    return http::send_file(asset_file("logos/app-icon.png"), "image/png", "app-icon.png", cache)
+xx
+
+/// User#initials: name.scan(/\b\w/).join (ASCII \b and \w, as in Ruby)
+act initials(name)
+    found | html::matches(name, "(?-u:\\b)[A-Za-z0-9_]")
+    return :join(found, "")
+xx
+
+/// GET /users/:avatar_token/avatar
+act avatar(c, token)
+    user | db::one("select u.id, u.name, u.role, campfire_crc32(u.id::text) % 18 as color, campfire_avatar_file(u.id) as variant from users u where u.id = campfire_user_from_avatar_token($1)", [token])
+    if user == nil => return http::head(404)
+    cache | "max-age=1800, public, stale-while-revalidate=604800"
+    if user["variant"] != nil => return http::send_file("/_send/storage/" + user["variant"], "image/webp", "avatar.webp", cache)
+    if user["role"] == 2 => return http::send_file(asset_file("default-bot-avatar.svg"), "image/svg+xml", "default-bot-avatar.svg", cache)
+    fill | AVATAR_COLORS[user["color"]]
+    letters | initials(user["name"])
+    fit | ""
+    if :len(letters) >= 3 => fit |= "textLength=\"85%\" lengthAdjust=\"spacingAndGlyphs\""
+    letters |= html::h(letters)
+    res | http::response(200, """<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+  viewBox="0 0 512 512" class="avatar" aria-hidden="true">
+  <defs>
+    <clipPath id="porthole">
+      <circle cx="50%" cy="50%" r="50%" />
+    </clipPath>
+  </defs>
+
+  <g>
+    <rect width="100%" height="100%" rx="50" fill="{fill}" />
+
+    <text x="50%" y="50%" fill="#FFFFFF"
+      text-anchor="middle" dy="0.35em"
+      {fit}
+      font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+      font-size="230"
+      font-weight="800"
+      letter-spacing="-5">
+      {letters}
+    </text>
+  </g>
+</svg>
+""")
+    :update!(res["headers"]["Content-Type"], "image/svg+xml; charset=utf-8")
+    :update!(res["headers"]["Cache-Control"], cache)
+    return res
+xx

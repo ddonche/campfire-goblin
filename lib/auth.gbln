@@ -141,6 +141,9 @@ xx
 /// session cookie refreshed on each authenticated request (Rails'
 /// authenticated_as sets it on resume, too), and flash bookkeeping.
 act finish(c, res)
+    /// VersionHeaders
+    res |= http::add_header(res, "X-Version", "0")
+    res |= http::add_header(res, "X-Rev", "")
     if c["new_csrf"]
         res |= http::add_cookie(res, CSRF_COOKIE, c["csrf"], "; path=/; httponly; samesite=lax")
     xx

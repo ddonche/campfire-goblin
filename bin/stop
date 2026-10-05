@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Stops what bin/server started.
+cd "$(dirname "$0")/.."
+[ -f tmp/nginx.pid ] && kill "$(cat tmp/nginx.pid)" 2>/dev/null
+PORT=${GOBLIN_PORT:-3102}
+pid=$(ss -ltnp "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)
+[ -n "$pid" ] && kill "$pid"
+true

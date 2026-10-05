@@ -1,0 +1,25 @@
+/// lib/cable.gbln -- ActionCable.server.broadcast and Turbo's broadcast_*_to.
+///
+/// goblin-host cannot hold a WebSocket open, so broadcasts are rows in
+/// cable_broadcasts that the /cable long-poll endpoint delivers. Each row's
+/// payload is the JSON message ActionCable would send to subscribers.
+
+import lib/db as db
+
+act broadcast(stream, message)
+    db::exec("insert into cable_broadcasts (stream, payload) values ($1, $2)", [stream, :json_stringify(message)])
+    return nil
+xx
+
+/// One statement for many streams (a fan-out to each member, say).
+act broadcast_many(streams, message)
+    if :len(streams) == 0 => return nil
+    db::exec("insert into cable_broadcasts (stream, payload) select s, $2 from json_array_elements_text($1::json) s", [:json_stringify(streams), :json_stringify(message)])
+    return nil
+xx
+
+/// turbo_stream_action_tag
+act stream_tag(verb, target, template)
+    if template == nil => return "<turbo-stream action=\"{verb}\" target=\"{target}\"></turbo-stream>"
+    return "<turbo-stream action=\"{verb}\" target=\"{target}\"><template>{template}</template></turbo-stream>"
+xx

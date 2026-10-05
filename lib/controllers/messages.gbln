@@ -3,7 +3,11 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/html as html
 import lib/views/messages as message_views
+import lib/views/layout as layout
+import lib/content as content
+import lib/cable as cable
 
 /// A page of messages for the scrollback paginator. $3/$4 are the message
 /// to page before/after (0 when absent).
@@ -50,6 +54,51 @@ act index(c, room_id)
     return http::html("\n" + message_views::collection(c, list))
 xx
 
+/// The context broadcasts render in: no current user and no session, as
+/// with Rails' ApplicationController.renderer.
+act broadcast_context(c)
+    return {"req": c["req"], "csrf": nil, "user": nil, "account": c["account"]}
+xx
+
+/// Views rendered for a Turbo Stream response omit form tokens.
+act stream_context(c)
+    :update!(c["csrf"], nil)
+    return c
+xx
+
+act room_not_found(c)
+    p | layout::page("Campfire")
+    :update!(p["main"], """<turbo-frame id="composer-frame">
+  <span class="composer__input input input--actor shake margin-block-end txt-negative txt-align-center" style="--input-border-color: var(--color-negative)">
+      <span>This room was deleted.</span>
+  </span>
+</turbo-frame>
+""")
+    return http::html(layout::render(c, p))
+xx
+
+/// POST /rooms/:room_id/messages
 act create(c, room_id)
-    return http::text(501, "Not Implemented")
+    req | c["req"]
+    if numeric(room_id) == false => return room_not_found(c)
+    uid | c["user"]["id"]
+    room | db::one("select r.id, r.type from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [uid, :int(room_id)])
+    if room == nil => return room_not_found(c)
+    body | nil
+    if http::has_param(req, "message[body]") => body |= content::canonicalize(http::param(req, "message[body]"))
+    plain | ""
+    if body != nil => plain |= content::plain_text({"body": body})
+    created | db::doc("select campfire_create_message($1, $2, $3, $4, $5)", [uid, room["id"], body, http::param(req, "message[client_message_id]"), plain])
+    m | created["message"]
+    target | "messages_" + html::room_key(room)
+    /// broadcast_create: append to the room's message stream, then tell each
+    /// member's unread-rooms stream.
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [room["type"], room["id"]])
+    cable::broadcast(stream, cable::stream_tag("append", target, message_views::single(broadcast_context(c), m)))
+    streams | []
+    for id in created["member_ids"]
+        :put_last!(streams, "user_" + :str(id) + "_unreads")
+    xx
+    cable::broadcast_many(streams, {"roomId": room["id"]})
+    return http::turbo_stream(cable::stream_tag("append", target, message_views::single(stream_context(c), m)) + "\n")
 xx
