@@ -51,3 +51,72 @@ act disk(c, encoded_key)
     if :file_exists(path) == false => return http::head(404)
     return http::send_file_as("/_send/" + path, key["content_type"], key["disposition"], "max-age=3600, public")
 xx
+
+/// ActiveStorage::Blobs::ProxyController#show and
+/// ActiveStorage::Representations::ProxyController#show: the file itself,
+/// streamed by nginx. A Range request gets nginx's 206 with the headers
+/// send_blob_byte_range_data sets; otherwise http_cache_forever applies,
+/// its weak ETag being the request's full path.
+act stream(c, b)
+    path | "/_stream/" + storage::file_path(b["key"])
+    disposition | storage::content_disposition(storage::serving_disposition(b, http::param(c["req"], "disposition")), b["filename"])
+    if http::header("range") != ""
+        res | http::send_file_as(path, storage::serving_type(b), disposition, "no-cache")
+        :update!(res["headers"]["Content-Transfer-Encoding"], "binary")
+        return res
+    xx
+    fullpath | http::header("x-request-uri")
+    if fullpath == "" => fullpath |= c["req"]["path"]
+    etag | "W/\"" + db::value("select left(encode(sha256(convert_to($1, 'UTF8')), 'hex'), 32) as v", [fullpath]) + "\""
+    res | http::send_file_as(path, storage::serving_type(b), disposition, "max-age=3155695200, public, immutable")
+    if fresh(etag)
+        res |= http::response(304, "")
+        :update!(res["headers"]["Cache-Control"], "max-age=3155695200, public, immutable")
+    xx
+    /// nginx serves the file and sets these from the X-Campfire- copies
+    :update!(res["headers"]["X-Campfire-ETag"], etag)
+    :update!(res["headers"]["X-Campfire-Last-Modified"], "Sat, 01 Jan 2011 00:00:00 GMT")
+    if res["status"] == 304
+        :update!(res["headers"]["ETag"], etag)
+        :update!(res["headers"]["Last-Modified"], "Sat, 01 Jan 2011 00:00:00 GMT")
+    xx
+    return res
+xx
+
+/// request.fresh? for an ETag and the 2011 Last-Modified http_cache_forever uses
+act fresh(etag)
+    inm | http::header("if-none-match")
+    ims | http::header("if-modified-since")
+    if inm == "" and ims == "" => return false
+    etag_ok | true
+    if inm != ""
+        etag_ok |= false
+        for t in :split(inm, ",")
+            tag | :trim(:str(t))
+            if tag == "*" or tag == etag or "W/" + tag == etag or tag == etag[2:] => etag_ok |= true
+        xx
+    xx
+    time_ok | true
+    if ims != ""
+        time_ok |= db::value("select coalesce((select $1::timestamptz >= timestamptz '2011-01-01 00:00:00+00' where $1 ~ '^[A-Za-z]{3}, [0-9]{2} [A-Za-z]{3} [0-9]{4} [0-9:]{8} GMT$'), false) as v", [ims])
+    xx
+    return etag_ok and time_ok
+xx
+
+/// GET /rails/active_storage/blobs/proxy/:signed_id/*filename
+act proxy(c, signed_id)
+    b | find_blob(signed_id)
+    if b == nil => return http::head(404)
+    return stream(c, b)
+xx
+
+/// GET /rails/active_storage/representations/proxy/:signed_blob_id/:variation_key/*filename
+act representation_proxy(c, signed_id, variation_key)
+    b | find_blob(signed_id)
+    if b == nil => return http::head(404)
+    v | storage::decode_variation(variation_key)
+    if v == nil => return http::head(404)
+    rep | storage::representation(b, v)
+    if rep == nil => return http::head(404)
+    return stream(c, rep)
+xx

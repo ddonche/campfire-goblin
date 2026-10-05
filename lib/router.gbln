@@ -59,6 +59,19 @@ act request_authentication(c)
     return res
 xx
 
+act active_storage(c, s, n, m)
+    if m != "GET" => return nil
+    if s[2] == "blobs" and s[3] == "redirect" and n >= 5 => return blobs::show(c, s[4])
+    if s[2] == "representations" and s[3] == "redirect" and n >= 6 => return blobs::representation(c, s[4], s[5])
+    if s[2] == "blobs" and s[3] == "proxy" and n >= 5 => return blobs::proxy(c, s[4])
+    if s[2] == "representations" and s[3] == "proxy" and n >= 6 => return blobs::representation_proxy(c, s[4], s[5])
+    /// the older, unprefixed forms of the redirect routes
+    if s[2] == "blobs" and n >= 5 => return blobs::show(c, s[3])
+    if s[2] == "representations" and n >= 6 => return blobs::representation(c, s[3], s[4])
+    if s[2] == "disk" and n >= 4 => return blobs::disk(c, s[3])
+    return nil
+xx
+
 act dispatch(c)
     req | c["req"]
     m | req["method"]
@@ -98,10 +111,16 @@ act dispatch(c)
     if n == 1 and (s[0] == "service-worker" or s[0] == "service-worker.js") and m == "GET" => return pwa_ctl::service_worker(c)
 
     /// ActiveStorage's engine routes, mounted outside ApplicationController
-    if n >= 4 and s[0] == "rails" and s[1] == "active_storage" and m == "GET"
-        if s[2] == "blobs" and s[3] == "redirect" and n >= 5 => return blobs::show(c, s[4])
-        if s[2] == "representations" and s[3] == "redirect" and n >= 6 => return blobs::representation(c, s[4], s[5])
-        if s[2] == "disk" and n >= 4 => return blobs::disk(c, s[3])
+    if n >= 4 and s[0] == "rails" and s[1] == "active_storage"
+        res | active_storage(c, s, n, m)
+        if res != nil
+            /// no session or CSRF cookie: ActiveStorage::BaseController
+            /// is not an ApplicationController
+            ctx | c
+            :update!(ctx["new_csrf"], false)
+            :update!(res["context"], ctx)
+            return res
+        xx
     xx
 
     /// ---- everything else requires a signed-in user ----
