@@ -1,0 +1,41 @@
+/// lib/db.gbln
+/// Thin helpers over Goblin's Postgres builtins.
+///
+/// Every db_* call opens its own connection, so pages fetch what they need in
+/// as few statements as possible: queries return one JSON document that
+/// Postgres assembles (json_agg / json_build_object) and Goblin parses.
+/// Goblin's row decoder returns nil for timestamp and json columns, so
+/// anything other than text, numbers and booleans travels inside that JSON.
+
+act all(sql, params)
+    row | :db_query_one("select coalesce((select json_agg(q) from (" + sql + ") q), '[]')::text as j", params)
+    return :json_parse(row["j"])
+xx
+
+act one(sql, params)
+    rows | all(sql + " limit 1", params)
+    if :len(rows) == 0 => return nil
+    return rows[0]
+xx
+
+/// Runs a query whose single column is already JSON and returns it parsed.
+act doc(sql, params)
+    row | :db_query_one("select (" + sql + ")::text as j", params)
+    if row == nil => return nil
+    if row["j"] == nil => return nil
+    return :json_parse(row["j"])
+xx
+
+act exec(sql, params)
+    return :db_exec(sql, params)
+xx
+
+/// Value of a single text/int column.
+act value(sql, params)
+    row | :db_query_one(sql, params)
+    if row == nil => return nil
+    for k in :keys(row)
+        return row[k]
+    xx
+    return nil
+xx

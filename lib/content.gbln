@@ -1,0 +1,613 @@
+/// lib/content.gbln
+/// Message presentation: MessagesHelper#message_presentation and the Action
+/// Text pipeline behind it.
+///
+///   1. ContentFilters (RemoveSoloUnfurledLinkText, SanitizeTags,
+///      SanitizeAttributes) over the stored rich text body
+///   2. Action Text renders attachments (mentions, link previews)
+///   3. auto_link turns bare URLs and email addresses into links, then
+///      re-sanitizes with Rails' safe list plus the editor's formatting
+///
+/// There is no HTML parser in Goblin, so this builds a small element tree
+/// from a regex tokenizer. It handles the markup Campfire's editor produces;
+/// it is not a general HTML5 parser.
+
+import lib/html as html
+import lib/sounds as sounds
+
+/// SanitizeTags::ALLOWED_TAGS (elements outside it are removed with their content)
+FILTER_TAGS | {"a": 1, "abbr": 1, "acronym": 1, "address": 1, "b": 1, "big": 1, "blockquote": 1, "br": 1, "cite": 1, "code": 1, "dd": 1, "del": 1, "dfn": 1, "div": 1, "dl": 1, "dt": 1, "em": 1, "h1": 1, "h2": 1, "h3": 1, "h4": 1, "h5": 1, "h6": 1, "hr": 1, "i": 1, "ins": 1, "kbd": 1, "li": 1, "ol": 1, "p": 1, "pre": 1, "samp": 1, "small": 1, "span": 1, "strong": 1, "sub": 1, "sup": 1, "time": 1, "tt": 1, "ul": 1, "var": 1, "s": 1, "u": 1, "mark": 1, "table": 1, "thead": 1, "tbody": 1, "tfoot": 1, "tr": 1, "th": 1, "td": 1, "action-text-attachment": 1, "figure": 1, "figcaption": 1}
+
+/// ActionText::ContentHelper.allowed_attributes + class (SanitizeAttributes)
+FILTER_ATTRS | {"abbr": 1, "alt": 1, "caption": 1, "cite": 1, "class": 1, "content": 1, "content-type": 1, "controls": 1, "data-language": 1, "datetime": 1, "filename": 1, "filesize": 1, "height": 1, "href": 1, "lang": 1, "name": 1, "poster": 1, "presentation": 1, "previewable": 1, "sgid": 1, "src": 1, "start": 1, "style": 1, "title": 1, "url": 1, "value": 1, "width": 1, "xml:lang": 1}
+
+/// MessagesHelper::AUTO_LINK_ALLOWED_TAGS / _ATTRIBUTES (disallowed tags are
+/// stripped, keeping their content)
+FINAL_TAGS | {"a": 1, "abbr": 1, "acronym": 1, "address": 1, "b": 1, "big": 1, "blockquote": 1, "br": 1, "cite": 1, "code": 1, "dd": 1, "del": 1, "dfn": 1, "div": 1, "dl": 1, "dt": 1, "em": 1, "h1": 1, "h2": 1, "h3": 1, "h4": 1, "h5": 1, "h6": 1, "hr": 1, "i": 1, "img": 1, "ins": 1, "kbd": 1, "li": 1, "mark": 1, "ol": 1, "p": 1, "pre": 1, "s": 1, "samp": 1, "small": 1, "span": 1, "strong": 1, "sub": 1, "sup": 1, "table": 1, "tbody": 1, "td": 1, "tfoot": 1, "th": 1, "thead": 1, "time": 1, "tr": 1, "tt": 1, "u": 1, "ul": 1, "var": 1}
+FINAL_ATTRS | {"abbr": 1, "alt": 1, "cite": 1, "class": 1, "data-language": 1, "datetime": 1, "height": 1, "href": 1, "lang": 1, "name": 1, "src": 1, "target": 1, "title": 1, "width": 1, "xml:lang": 1}
+
+/// Loofah's ALLOWED_PROTOCOLS for URI-valued attributes
+PROTOCOLS | {"afs": 1, "aim": 1, "callto": 1, "data": 1, "ed2k": 1, "fax": 1, "ftp": 1, "gopher": 1, "http": 1, "https": 1, "irc": 1, "line": 1, "mailto": 1, "modem": 1, "news": 1, "nntp": 1, "rsync": 1, "rtsp": 1, "sftp": 1, "sms": 1, "ssh": 1, "tag": 1, "tel": 1, "telnet": 1, "urn": 1, "webcal": 1, "xmpp": 1}
+URI_ATTRS | {"action": 1, "cite": 1, "href": 1, "longdesc": 1, "poster": 1, "preload": 1, "src": 1, "xlink:href": 1, "xml:base": 1}
+
+VOID | {"area": 1, "base": 1, "br": 1, "col": 1, "embed": 1, "hr": 1, "img": 1, "input": 1, "link": 1, "meta": 1, "param": 1, "source": 1, "track": 1, "wbr": 1}
+DROP_CONTENT | {"script": 1, "style": 1, "iframe": 1, "noscript": 1, "object": 1, "template": 1, "math": 1, "svg": 1}
+
+MENTION_TYPE | "application/vnd.campfire.mention"
+OPENGRAPH_TYPE | "application/vnd.actiontext.opengraph-embed"
+
+/// ---------- entities ----------
+
+act decode_entities(s)
+    if :has(s, "&") == false => return s
+    t | s
+    :update_where!(t, "&lt;", "<")
+    :update_where!(t, "&gt;", ">")
+    :update_where!(t, "&quot;", "\"")
+    :update_where!(t, "&#39;", "'")
+    :update_where!(t, "&#x27;", "'")
+    :update_where!(t, "&nbsp;", "\u{a0}")
+    :update_where!(t, "&amp;", "&")
+    return t
+xx
+
+act escape_text(s)
+    t | s
+    :update_where!(t, "&", "&amp;")
+    :update_where!(t, "<", "&lt;")
+    :update_where!(t, ">", "&gt;")
+    :update_where!(t, "\u{a0}", "&nbsp;")
+    return t
+xx
+
+act escape_attr(s)
+    t | s
+    :update_where!(t, "&", "&amp;")
+    :update_where!(t, "\"", "&quot;")
+    return t
+xx
+
+/// ---------- parsing ----------
+
+act parse_attrs(tag)
+    attrs | []
+    inner | tag[1:]
+    sp | :find(inner, " ")
+    if sp == nil => return attrs
+    rest | inner[sp:]
+    pairs | html::matches(rest, "([a-zA-Z_:][-a-zA-Z0-9_:.]*)(\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s\"'>]+))?")
+    for p in pairs
+        eq | :find(p, "=")
+        if eq == nil
+            lp | :lower(p)
+            :put_last!(attrs, [lp, ""])
+        else
+            k | :lower(:trim(p[0:eq]))
+            v | :trim(p[eq + 1:])
+            if :starts_with(v, "\"") or :starts_with(v, "'")
+                v |= v[1:]
+                v |= html::chop(v, 1)
+            xx
+            :put_last!(attrs, [k, decode_entities(v)])
+        xx
+    xx
+    return attrs
+xx
+
+act tag_name(tag)
+    found | html::matches(tag, "^</?([a-zA-Z][-a-zA-Z0-9]*)")
+    if :len(found) == 0 => return ""
+    n | found[0]
+    if :starts_with(n, "</") => return :lower(n[2:])
+    return :lower(n[1:])
+xx
+
+act new_el(name, attrs)
+    return {"t": "el", "name": name, "attrs": attrs, "kids": []}
+xx
+
+/// Goblin passes maps by value, so tree edits return the edited node.
+act add_kid(parent, node)
+    kids | parent["kids"]
+    :put_last!(kids, node)
+    :update!(parent["kids"], kids)
+    return parent
+xx
+
+/// Closes the open elements above depth `to`, each into its parent.
+act close_to(open, to)
+    st | open
+    while :len(st) - 1 > to
+        ti | :len(st) - 1
+        el | st[ti]
+        st |= st[0:ti]
+        :update!(st[ti - 1], add_kid(st[ti - 1], el))
+    xx
+    return st
+xx
+
+/// Parses an HTML fragment into a root element whose kids are the nodes.
+act parse(src)
+    root | new_el("#root", [])
+    if src == nil => return root
+    stack | [root]
+    toks | html::matches(src, "<!--[\\s\\S]*?-->|<[^>]*>|[^<]+|<")
+    for tok in toks
+        ti | :len(stack) - 1
+        top | stack[ti]
+        if :starts_with(tok, "<!--")
+            tok |= tok
+        elif :starts_with(tok, "</")
+            name | tag_name(tok)
+            depth | :len(stack) - 1
+            found | -1
+            while depth > 0 and found < 0
+                if stack[depth]["name"] == name => found |= depth
+                depth |= depth - 1
+            xx
+            if found > 0
+                stack |= close_to(stack, found - 1)
+            xx
+        elif :starts_with(tok, "<") and :len(tok) > 1 and :is_matching(tok, "^<[a-zA-Z]")
+            name | tag_name(tok)
+            el | new_el(name, parse_attrs(tok))
+            self_closing | :ends_with(tok, "/>")
+            if :has(VOID, name) == false and self_closing == false
+                :put_last!(stack, el)
+            else
+                :update!(stack[ti], add_kid(top, el))
+            xx
+        else
+            :update!(stack[ti], add_kid(top, {"t": "text", "text": decode_entities(tok)}))
+        xx
+    xx
+    stack |= close_to(stack, 0)
+    return stack[0]
+xx
+
+/// ---------- serialization (Nokogiri's HTML output) ----------
+
+act attr_value(attrs, name)
+    for a in attrs
+        if a[0] == name => return a[1]
+    xx
+    return nil
+xx
+
+act serialize_attrs(attrs)
+    out | ""
+    for a in attrs
+        k | a[0]
+        v | escape_attr(a[1])
+        out |= out + " " + k + "=\"" + v + "\""
+    xx
+    return out
+xx
+
+act serialize(node)
+    if node["t"] == "text" => return escape_text(node["text"])
+    if node["t"] == "raw" => return node["html"]
+    inner | ""
+    for k in node["kids"]
+        inner |= inner + serialize(k)
+    xx
+    name | node["name"]
+    if name == "#root" => return inner
+    a | serialize_attrs(node["attrs"])
+    if :has(VOID, name) => return "<" + name + a + ">"
+    return "<" + name + a + ">" + inner + "</" + name + ">"
+xx
+
+act text_of(node)
+    if node["t"] == "text" => return node["text"]
+    out | ""
+    if :has(node, "kids")
+        for k in node["kids"]
+            out |= out + text_of(k)
+        xx
+    xx
+    return out
+xx
+
+/// ---------- filters ----------
+
+act scheme_ok(value)
+    v | :lower(:trim(value))
+    v |= :update_matching(v, "[\\x00-\\x20]", "")
+    colon | :find(v, ":")
+    if colon == nil => return true
+    slash | :find(v, "/")
+    if slash != nil and slash < colon => return true
+    return :has(PROTOCOLS, v[0:colon])
+xx
+
+act scrub_attrs(attrs, allowed)
+    out | []
+    for a in attrs
+        k | a[0]
+        if :has(allowed, k)
+            if :has(URI_ATTRS, k) == false or scheme_ok(a[1])
+                :put_last!(out, a)
+            xx
+        xx
+    xx
+    return out
+xx
+
+/// SanitizeTags + SanitizeAttributes: disallowed elements go with their
+/// content, attributes outside the Action Text list are dropped.
+act filter_tree(node)
+    kept | []
+    for k in node["kids"]
+        if k["t"] == "text"
+            :put_last!(kept, k)
+        elif :has(FILTER_TAGS, k["name"])
+            :update!(k["attrs"], scrub_attrs(k["attrs"], FILTER_ATTRS))
+            :put_last!(kept, filter_tree(k))
+        xx
+    xx
+    :update!(node["kids"], kept)
+    return node
+xx
+
+/// The final sanitize: tags outside the list are replaced by their content
+/// (script/style-like ones are dropped), attributes outside it removed.
+act final_tree(node)
+    kept | []
+    for k in node["kids"]
+        if k["t"] == "el"
+            k |= final_tree(k)
+            if :has(FINAL_TAGS, k["name"])
+                :update!(k["attrs"], scrub_attrs(k["attrs"], FINAL_ATTRS))
+                :put_last!(kept, k)
+            elif :has(DROP_CONTENT, k["name"]) == false
+                for g in k["kids"]
+                    :put_last!(kept, g)
+                xx
+            xx
+        else
+            :put_last!(kept, k)
+        xx
+    xx
+    :update!(node["kids"], kept)
+    return node
+xx
+
+/// ---------- attachments ----------
+
+act find_attachments(node, found)
+    out | found
+    for k in node["kids"]
+        if k["t"] == "el"
+            if k["name"] == "action-text-attachment"
+                :put_last!(out, k)
+            else
+                out |= find_attachments(k, out)
+            xx
+        xx
+    xx
+    return out
+xx
+
+/// ActionText::Attachment::OpengraphEmbed.attributes_from_node
+act opengraph_attrs(el)
+    filename | attr_value(el["attrs"], "filename")
+    if filename != nil and filename != ""
+        return {"href": attr_value(el["attrs"], "href"), "url": attr_value(el["attrs"], "url"), "filename": filename, "description": attr_value(el["attrs"], "caption")}
+    xx
+    c | attr_value(el["attrs"], "content")
+    if c == nil => c |= ""
+    tree | parse(c)
+    title | find_class(tree, "og-embed__title")
+    link | nil
+    if title != nil => link |= find_tag(title, "a")
+    image | find_class(tree, "og-embed__image")
+    img | nil
+    if image != nil => img |= find_tag(image, "img")
+    desc | find_class(tree, "og-embed__description")
+    out | {"href": nil, "url": nil, "filename": nil, "description": nil}
+    if link != nil
+        :update!(out["href"], attr_value(link["attrs"], "href"))
+        :update!(out["filename"], :trim(text_of(link)))
+    elif title != nil
+        :update!(out["filename"], :trim(text_of(title)))
+    xx
+    if img != nil => :update!(out["url"], attr_value(img["attrs"], "src"))
+    if desc != nil => :update!(out["description"], :trim(text_of(desc)))
+    return out
+xx
+
+act find_class(node, klass)
+    for k in node["kids"]
+        if k["t"] == "el"
+            cls | attr_value(k["attrs"], "class")
+            if cls != nil and :has(:split(cls, " "), klass) => return k
+            r | find_class(k, klass)
+            if r != nil => return r
+        xx
+    xx
+    return nil
+xx
+
+act find_tag(node, name)
+    for k in node["kids"]
+        if k["t"] == "el"
+            if k["name"] == name => return k
+            r | find_tag(k, name)
+            if r != nil => return r
+        xx
+    xx
+    return nil
+xx
+
+/// web_url: absolute http(s) URLs on some other, named host only.
+act web_url(c, value)
+    if value == nil or value == "" => return nil
+    if :is_matching(value, "^(?i)https?://[^/?#]+") == false => return nil
+    host | :lower(:update_matching(value, "^(?i)https?://(?:[^@/?#]*@)?([^:/?#]+).*$", "$1"))
+    if :has(host, "%") or :has(host, ".") == false => return nil
+    labels | :split(host, ".")
+    li | :len(labels) - 1
+    last | labels[li]
+    if :is_matching(last, "(?i)[a-z]") == false or :is_matching(last, "(?i)^0x") => return nil
+    own | :lower(c["req"]["host"])
+    colon | :find(own, ":")
+    if colon != nil => own |= own[0:colon]
+    if :ends_with(host, ".") => host |= html::chop(host, 1)
+    if host == own => return nil
+    return value
+xx
+
+act truncate(s, n)
+    if s == nil => return ""
+    if :len(s) <= n => return s
+    return s[0:n - 1] + "…"
+xx
+
+act render_opengraph(c, el)
+    a | opengraph_attrs(el)
+    href | web_url(c, a["href"])
+    url | web_url(c, a["url"])
+    filename | html::h(truncate(a["filename"], 280))
+    desc | html::h(truncate(a["description"], 560))
+    tw | ""
+    if url != nil and :starts_with(url, "https://pbs.twimg.com/profile_images") => tw |= "og-embed--twitter-avatar"
+    title | filename
+    if href != nil and href != ""
+        hh | html::h(href)
+        title |= "<a rel=\"noreferrer\" target=\"_blank\" href=\"{hh}\">{filename}</a>"
+    xx
+    image | ""
+    if url != nil
+        uu | html::h(url)
+        image |= """      <div class="og-embed__image">
+          <img src="{uu}" class="image center" alt="">
+        </div>
+"""
+    xx
+    return """<figure class="attachment attachment--content attachment--og">
+  <actiontext-opengraph-embed>
+    <div class="og-embed gap {tw}">
+      <div class="og-embed__content">
+        <div class="og-embed__title">
+          {title}
+        </div>
+        <div class="og-embed__description">{desc}</div>
+      </div>
+{image}    </div>
+  </actiontext-opengraph-embed>
+</figure>
+"""
+xx
+
+/// users/_mention, as it comes out of the final sanitize.
+act render_mention(user)
+    id | user["id"]
+    title | html::h(user["title"])
+    src | html::h(user["avatar"])
+    name | html::h(user["name"])
+    return "<span class=\"mention\"><a title=\"{title}\" class=\"btn avatar\" href=\"/users/{id}\"><img src=\"{src}\" width=\"48\" height=\"48\"></a> {name}</span>"
+xx
+
+act render_attachment(c, m, el)
+    ctype | attr_value(el["attrs"], "content-type")
+    if ctype == OPENGRAPH_TYPE => return render_opengraph(c, el)
+    sgid | attr_value(el["attrs"], "sgid")
+    mentions | m["mentions"]
+    if sgid != nil and mentions != nil and :has(mentions, sgid) => return render_mention(mentions[sgid])
+    /// ActionText::Attachables::MissingAttachable
+    return "☒"
+xx
+
+act replace_attachments(c, m, node)
+    out | []
+    for k in node["kids"]
+        if k["t"] == "el" and k["name"] == "action-text-attachment"
+            for g in parse(render_attachment(c, m, k))["kids"]
+                :put_last!(out, g)
+            xx
+        else
+            if k["t"] == "el" => k |= replace_attachments(c, m, k)
+            :put_last!(out, k)
+        xx
+    xx
+    :update!(node["kids"], out)
+    return node
+xx
+
+/// RemoveSoloUnfurledLinkText: a message that is only an unfurled link shows
+/// the preview without the link text.
+act remove_solo_unfurled(c, root, plain)
+    previews | []
+    for a in find_attachments(root, [])
+        if attr_value(a["attrs"], "content-type") == OPENGRAPH_TYPE => :put_last!(previews, a)
+    xx
+    if :len(previews) != 1 => return root
+    href | opengraph_attrs(previews[0])["href"]
+    href |= web_url(c, href)
+    if href == nil => return root
+    if normalize_tweet_url(href) != normalize_tweet_url(:trim(plain)) => return root
+    if find_tag(root, "div") != nil
+        kids | []
+        for k in root["kids"]
+            if k["t"] == "el" and k["name"] == "div" => :update!(k["kids"], [previews[0]])
+            :put_last!(kids, k)
+        xx
+        :update!(root["kids"], kids)
+        return root
+    xx
+    kept | []
+    for k in root["kids"]
+        if k["t"] == "el" and k["name"] == "p"
+            if find_tag(k, "action-text-attachment") != nil => :put_last!(kept, k)
+        else
+            :put_last!(kept, k)
+        xx
+    xx
+    :update!(root["kids"], kept)
+    return root
+xx
+
+act normalize_tweet_url(url)
+    if url == nil => return ""
+    if :has(url, "x.com") == false and :has(url, "twitter.com") == false => return url
+    u | :update_matching(url, "^(https?://)(?i)x\\.com", "${1}twitter.com")
+    q | :find(u, "?")
+    if q != nil => u |= u[0:q]
+    return u
+xx
+
+/// ---------- auto_link (rails_autolink) ----------
+
+URL_RE | "(?i)(?:(?:ed2k|ftp|http|https|irc|mailto|news|gopher|nntp|telnet|webcal|xmpp|callto|feed|svn|urn|aim|rsync|tag|ssh|sftp|rtsp|afs|file):(?://)?|www\\.)[^\\s<\u{a0}\"]+"
+EMAIL_RE | "[\\w.!#$%+-]+@[\\w-]+(?:\\.[\\w-]+)+"
+
+act trim_url(u)
+    t | u
+    while :is_matching(t, "[.,;:!?]$")
+        t |= html::chop(t, 1)
+    xx
+    /// unbalanced closing brackets belong to the text, not the URL
+    for pair in [["(", ")"], ["[", "]"], ["\{", "\}"]]
+        while :ends_with(t, pair[1]) and :count(t, pair[1]) > :count(t, pair[0])
+            t |= html::chop(t, 1)
+        xx
+    xx
+    return t
+xx
+
+act link_text(text)
+    pattern | URL_RE + "|" + EMAIL_RE
+    found | html::matches(text, pattern)
+    if :len(found) == 0 => return [{"t": "text", "text": text}]
+    out | []
+    rest | text
+    for f in found
+        at | :find(rest, f)
+        if at != nil
+            url | trim_url(f)
+            before | rest[0:at]
+            after | rest[at + :len(url):]
+            if before != "" => :put_last!(out, {"t": "text", "text": before})
+            href | url
+            if :is_matching(url, "^" + EMAIL_RE + "$")
+                href |= "mailto:" + url
+            elif :starts_with(:lower(url), "www.")
+                href |= "http://" + url
+            xx
+            a | new_el("a", [["target", "_blank"], ["href", href]])
+            a |= add_kid(a, {"t": "text", "text": url})
+            :put_last!(out, a)
+            rest |= after
+        xx
+    xx
+    if rest != "" => :put_last!(out, {"t": "text", "text": rest})
+    return out
+xx
+
+act auto_link(node)
+    out | []
+    for k in node["kids"]
+        if k["t"] == "text"
+            for n in link_text(k["text"])
+                :put_last!(out, n)
+            xx
+        else
+            if k["t"] == "el" and k["name"] != "a" and k["name"] != "pre" and k["name"] != "code"
+                k |= auto_link(k)
+            xx
+            :put_last!(out, k)
+        xx
+    xx
+    :update!(node["kids"], out)
+    return node
+xx
+
+/// ---------- entry points ----------
+
+/// ActionText::Content#to_plain_text (enough for emoji, /play and search).
+act plain_text(m)
+    if :has(m, "plain") => return m["plain"]
+    body | m["body"]
+    if body == nil => return ""
+    t | body
+    if :has(t, "<")
+        t |= :update_matching(t, "(?i)<br\\s*/?>", "\n")
+        t |= :update_matching(t, "(?i)</(p|div|li|h[1-6]|blockquote|pre)>", "\n")
+        t |= :update_matching(t, "<[^>]*>", "")
+    xx
+    t |= :trim(decode_entities(t))
+    return t
+xx
+
+/// String#all_emoji?
+act all_emoji(s)
+    if s == "" => return false
+    return :is_matching(s, "^(\\p\{Emoji_Presentation\}|\\p\{Extended_Pictographic\}|\u{fe0f})+$")
+xx
+
+act rich_text(c, m)
+    body | m["body"]
+    if body == nil => body |= ""
+    root | parse(body)
+    root |= remove_solo_unfurled(c, root, plain_text(m))
+    root |= filter_tree(root)
+    root |= replace_attachments(c, m, root)
+    root |= auto_link(root)
+    root |= final_tree(root)
+    inner | serialize(root)
+    return "<div class=\"lexxy-content\">\n  " + inner + "\n</div>\n"
+xx
+
+act presentation(c, m)
+    att | m["attachment"]
+    if att != nil => return attachment(c, m, att)
+    plain | plain_text(m)
+    if :starts_with(plain, "/play ")
+        name | plain[6:]
+        if :is_matching(name, "^\\w+$")
+            s | sounds::find(name)
+            if s != nil => return sounds::presentation(s)
+        xx
+    xx
+    return rich_text(c, m)
+xx
+
+/// Messages::AttachmentPresentation
+act attachment(c, m, att)
+    path | html::h(att["path"])
+    name | html::h(att["filename"])
+    ctype | att["content_type"]
+    if att["previewable"] and (:starts_with(ctype, "image/") or :starts_with(ctype, "video/"))
+        w | att["width"]
+        ht | att["height"]
+        dims | ""
+        if w != nil and ht != nil => dims |= " width=\"" + :str(w) + "\" height=\"" + :str(ht) + "\""
+        if :starts_with(ctype, "video/")
+            return "<div class=\"attachment\"><video src=\"{path}\" controls=\"controls\" preload=\"none\" class=\"message__attachment\"{dims}></video></div>"
+        xx
+        return "<div class=\"attachment\"><a href=\"{path}\" data-action=\"lightbox#open:prevent\" data-lightbox-target=\"image\" data-lightbox-url-value=\"{path}?disposition=attachment\"><img src=\"{path}\" class=\"message__attachment\"{dims} alt=\"{name}\" /></a></div>"
+    xx
+    icon | html::img("common-file-text.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+    return "<div class=\"attachment\"><a class=\"btn btn--plain\" href=\"{path}?disposition=attachment\">{icon}<span>{name}</span></a></div>"
+xx

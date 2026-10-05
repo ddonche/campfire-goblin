@@ -1,0 +1,17 @@
+/// app/api/app.gbln -- the front controller.
+///
+/// nginx sends every request that is not a static file here (goblin-host
+/// maps /api/<name> to <docroot>/api/<name>.gbln and has no routing of its
+/// own). This file is config/routes.rb plus the before_actions every
+/// Campfire controller runs.
+
+import lib/http as http
+import lib/auth as auth
+import lib/router as router
+
+req | http::request()
+c | auth::context(req)
+res | router::dispatch(c)
+if :has(res, "context") => c |= res["context"]
+res |= auth::finish(c, res)
+http::emit(res)

@@ -1,0 +1,261 @@
+/// lib/views/rooms.gbln
+/// rooms/show and its partials (_nav, _invitation, _composer),
+/// rooms/involvements/_bell and accounts/_invite.
+
+import lib/html as html
+import lib/platform as platform
+import lib/views/pwa as pwa
+import lib/views/messages as message_views
+
+act room_path_kind(room)
+    t | room["type"]
+    if t == "Rooms::Open" => return "opens"
+    if t == "Rooms::Closed" => return "closeds"
+    return "directs"
+xx
+
+act bell(c, room)
+    id | room["id"]
+    involvement_id | "involvement_" + html::room_key(room)
+    what | "room"
+    if room["type"] == "Rooms::Direct" => what |= "Ping"
+    loading | html::img("notification-bell-loading.svg", "aria-hidden=\"true\" ", 20)
+    alert | html::img("notification-bell-alert.svg", "aria-hidden=\"true\" hidden=\"hidden\" ", 20)
+    alert48 | html::img("notification-bell-alert.svg", "aria-hidden=\"true\" ", 48)
+    remove | html::img("remove.svg", "aria-hidden=\"true\" ", 20)
+    p | platform::parse(c["req"]["user_agent"])
+    root_url | c["req"]["base"] + "/"
+    browser | pwa::browser_settings(p, root_url)
+    system | pwa::system_settings(p)
+    install | pwa::install_instructions(p)
+    return """<span>
+  <span class="button_to_change_notifying"
+      data-controller="notifications" data-notifications-subscriptions-url-value="/users/me/push_subscriptions" data-notifications-attention-class="btn--pulsing">
+    <turbo-frame data-controller="turbo-frame" data-action="notifications:ready@window-&gt;turbo-frame#load" data-turbo-frame-url-param="/rooms/{id}/involvement" id="{involvement_id}">
+      <button class="btn" data-action="click->notifications#attemptToSubscribe" data-notifications-target="bell">
+        {loading}
+        {alert}
+        <span class="for-screen-reader">Notification settings for this {what}</span>
+      </button>
+</turbo-frame>
+    <dialog data-notifications-target="notAllowedNotice" class="dialog pad center center-block border-radius border shadow" style="--inline-space: var(--block-space)">
+      <div class="flex flex-column txt-align-center">
+        <span class="btn btn--faux center txt-x-large">
+          {alert48}
+          <span class="for-screen-reader">Notifications alert</span>
+        </span>
+
+        <section>
+          <h1 class="txt-large margin-none">Notifications aren’t allowed</h1>
+          <div class="txt-align-start margin-block-start">
+            {browser}
+            {system}
+            {install}
+          </div>
+        </section>
+
+        <form method="dialog" class="flex align-center gap center">
+          <button class="btn dialog__close" autofocus="true">
+            <span class="for-screen-reader">Close</span>
+            {remove}
+          </button>
+        </form>
+      </div>
+    </dialog>
+  </span>
+</span>
+"""
+xx
+
+act nav(c, room, display_name)
+    id | room["id"]
+    logo | ""
+    if c["account"]["has_logo"] => logo |= html::account_logo_tag(c["account"], "")
+    ping | ""
+    what | "room"
+    if room["type"] == "Rooms::Direct"
+        ping |= "\n        <span class=\"for-screen-reader\">Ping with</span>\n"
+        what |= "Ping"
+    xx
+    name | html::h(display_name)
+    kind | room_path_kind(room)
+    dots | html::img("menu-dots-horizontal.svg", "aria-hidden=\"true\" ", 20)
+    b | bell(c, room)
+    return """  {logo}
+
+  <span class="btn btn--reversed btn--faux room--current">
+    <h1 class="room__contents txt-medium overflow-ellipsis">{ping}
+
+      {name}
+    </h1>
+</span>
+  <a class="btn" style="view-transition-name: edit-room-{id}" data-room-id="{id}" href="/rooms/{kind}/{id}/edit">
+    {dots}
+    <span class="for-screen-reader">Settings for this {what}</span>
+</a>
+  {b}
+"""
+xx
+
+act invite(c)
+    account | c["account"]
+    url | c["req"]["base"] + "/join/" + account["join_code"]
+    qr_id | :update_matching(:update_matching(url, "\\+", "-"), "/", "_")
+    person | html::img("person-add.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
+    qr | html::img("qr-code.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
+    copy | html::img("copy-paste.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
+    share | html::img("share.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
+    refresh | html::img("refresh.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
+    regen | ""
+    if c["user"]["role"] == 1
+        token | c["csrf"]
+        regen |= """
+      <form class="button_to" method="post" action="/account/join_code"><button class="btn btn--regenerate" type="submit">
+        {refresh}
+        <span class="for-screen-reader">Regenerate join link</span>
+</button><input type="hidden" name="authenticity_token" value="{token}" /></form>"""
+    xx
+    return """<div class="flex flex-column align-center gap">
+
+  <label class="flex flex-column gap full-width" style="--row-gap: 0.5em">
+    <strong id="invite_label" class="invite-label">Share to invite more people</strong>
+    <span class="flex align-center gap input input--actor fill-white">
+      {person}
+      <input type="text" class="input" id="invite_url" value="{url}" aria-labelledby="invite_label" readonly>
+    </span>
+  </label>
+
+  <div class="flex align-center gap">
+    <a class="btn" data-lightbox-target="image" data-action="lightbox#open" data-lightbox-url-value="/qr_code/{qr_id}" href="/qr_code/{qr_id}">
+      <span class="for-screen-reader">Show join link QR code</span>
+      {qr}
+</a>
+    <button class="btn" data-controller="copy-to-clipboard" data-action="copy-to-clipboard#copy" data-copy-to-clipboard-success-class="btn--success" data-copy-to-clipboard-content-value="{url}">
+      <span class="for-screen-reader">Copy join link</span>
+      {copy}
+</button>
+    <button class="btn" hidden="hidden" data-controller="web-share" data-action="web-share#share" data-web-share-url-value="{url}" data-web-share-text-value="Hit this link to join me in Campfire and start chatting." data-web-share-title-value="Link to join Campfire">
+      <span class="for-screen-reader">Share join link</span>
+      {share}
+</button>{regen}
+  </div>
+</div>
+"""
+xx
+
+act invitation(c)
+    logo | html::account_logo_tag(c["account"], "center margin-block-end txt-large")
+    t | html::translation_button("invite_message")
+    inv | invite(c)
+    return """  <div id="system_welcome" class="message message--formatted txt-align-center center">
+    <div class="message__body center">
+      <div class="message__body-content position-relative">
+        {logo}
+        <div class="flex align-center gap">
+          <div class="system-welcome--translation">
+            {t}
+          </div>
+          <p>
+            <strong>Welcome to Campfire</strong><br>
+            To invite people to chat, share the join link below.
+          </p>
+        </div>
+        {inv}      </div>
+    </div>
+  </div>
+"""
+xx
+
+act composer(c, room)
+    id | room["id"]
+    token | c["csrf"]
+    base | c["req"]["base"]
+    search | html::img("search.svg", "aria-hidden=\"true\" ", 20)
+    hint | html::img("messages-outlined.svg", "aria-hidden=\"true\" class=\"composer__input-hint colorize--black\" style=\"view-transition-name: input-btn;\" ", 22)
+    attach | html::img("attachment.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 22)
+    rich | html::img("text-options.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+    up | html::img("arrow-up.svg", "aria-hidden=\"true\" ", 20)
+    return """  <div class="composer flex align-end gap position-relative"
+      data-controller="typing-notifications" data-typing-notifications-active-class="typing-indicator--active">
+    <a class="btn flex-item-no-shrink margin-block-end composer__context-btn" style="view-transition-name: input-switcher" href="/searches">
+      {search}
+      <span class="for-screen-reader">Search</span>
+</a>
+    <turbo-frame id="composer-frame">
+      <form id="composer" class="margin-block flex-item-grow contain" data-controller="composer drop-target" data-action="dragenter-&gt;drop-target#dragenter dragover-&gt;drop-target#dragover drop-&gt;drop-target#drop drop-target:drop@window-&gt;composer#dropFiles lexxy:file-accept-&gt;composer#preventAttachment refresh-room:online@window-&gt;composer#online typing-notifications#stop paste-&gt;composer#pasteFiles turbo:submit-end-&gt;composer#submitEnd refresh-room:offline@window-&gt;composer#offline" data-composer-messages-outlet="#message-area" data-composer-toolbar-class="composer--rich-text" data-composer-room-id-value="{id}" action="/rooms/{id}/messages" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="{token}" />
+        <fieldset data-composer-target="fields" contents>
+          <div class="flex flex-column">
+            <div class="composer__filelist flex flex--align-center gap flex-wrap" data-composer-target="fileList"></div>
+
+            <div class="flex composer__input input input--actor fill-white min-width" style="--input-border-radius: 1.3rem">
+              <div class="flex align-end gap full-width">
+                {hint}
+
+                <div class="flex flex-column flex-item-grow min-width gap">
+                  <lexxy-editor rows="1" class="input lexxy-content" style="order: -1" aria-multiline="true" aria-label="Write a message" permitted-attachment-types="application/vnd.campfire.mention application/vnd.actiontext.opengraph-embed" data-controller="unfurl" data-action="lexxy:change-&gt;typing-notifications#start keydown-&gt;composer#submitByKeyboard:capture lexxy:change-&gt;composer#saveDraft lexxy:insert-link-&gt;unfurl#unfurl" data-composer-target="text" data-direct-upload-url="{base}/rails/active_storage/direct_uploads" data-blob-url-template="{base}/rails/active_storage/blobs/redirect/:signed_id/:filename" id="message_body" input="message_body_trix_input_message" name="message[body]">
+                    <lexxy-prompt trigger="@" name="mention" src="/autocompletable/users?room_id={id}" remote-filtering="true" empty-results="No matches"></lexxy-prompt>
+</lexxy-editor>                </div>
+
+                <label class="btn btn--borderless txt-small flex-item-no-shrink composer__attachment-btn input--file">
+                  {attach}
+                  <input type="file" data-action="composer#filePicked" multiple />
+                  <span class="for-screen-reader">Attach a file</span>
+                </label>
+
+                <button class="btn btn--borderless txt-small flex-item-no-shrink composer__rich-text-btn" type="button" data-action="composer#toggleToolbar">
+                  {rich}
+                  <span class="for-screen-reader">Rich text</span>
+                </button>
+
+                <button name="send" type="submit" data-action="composer#submit" class="btn btn--reversed flex-item-no-shrink txt-small">
+                  {up}
+                  <span class="for-screen-reader">Send Message</span>
+</button>              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <div class="typing-indicator gap txt-small align-center flex-inline" data-typing-notifications-target="indicator">
+          <div class="typing-indicator__author spinner" data-typing-notifications-target="author"></div>
+        </div>
+
+        <input data-composer-target="clientid" type="hidden" name="message[client_message_id]" id="message_client_message_id" />
+</form>    </turbo-frame>
+  </div>
+"""
+xx
+
+act sidebar_frame()
+    return "<turbo-frame data-turbo-permanent=\"true\" data-controller=\"rooms-list read-rooms turbo-frame\" data-rooms-list-unread-class=\"unread\" data-action=\"presence:present@window->rooms-list#read read-rooms:read->rooms-list#read turbo:frame-load->rooms-list#loaded refresh-room:visible@window->turbo-frame#reload\" id=\"user_sidebar\" src=\"/users/me/sidebar\" target=\"_top\"></turbo-frame>"
+xx
+
+/// The main content of rooms/show.
+act show_main(c, data)
+    room | data["room"]
+    id | room["id"]
+    base | c["req"]["base"]
+    key | html::room_key(room)
+    tmpl | message_views::template(c)
+    loaded | room["updated_epoch"]
+    inv | ""
+    if data["original"] and data["paged"] == false => inv |= invitation(c)
+    list | message_views::collection(c, data["messages"])
+    stream | data["stream"]
+    down | html::img("arrow-down.svg", "aria-hidden=\"true\" ", 20)
+    return """
+
+
+
+<div id="message-area" class="message-area" contents="true" data-controller="messages presence drop-target" data-action="turbo:before-stream-render@document-&gt;messages#beforeStreamRender keydown.up@document-&gt;messages#editMyLastMessage dragenter-&gt;drop-target#dragenter dragover-&gt;drop-target#dragover drop-&gt;drop-target#drop visibilitychange@document-&gt;presence#visibilityChanged" data-messages-first-of-day-class="message--first-of-day" data-messages-formatted-class="message--formatted" data-messages-me-class="message--me" data-messages-mentioned-class="message--mentioned" data-messages-threaded-class="message--threaded" data-messages-page-url-value="{base}/rooms/{id}/messages">
+  {tmpl}
+
+  <div id="messages_{key}" class="messages" data-controller="maintain-scroll refresh-room" data-action="turbo:before-stream-render@document-&gt;maintain-scroll#beforeStreamRender visibilitychange@document-&gt;refresh-room#visibilityChanged online@window-&gt;refresh-room#online" data-messages-target="messages" data-refresh-room-loaded-at-value="{loaded}" data-refresh-room-url-value="{base}/rooms/{id}/refresh">
+    {inv}
+    
+{list}</div>
+  <turbo-cable-stream-source channel="RoomMessagesChannel" signed-stream-name="{stream}"></turbo-cable-stream-source>
+  <button class="message-area__return-to-latest btn" data-action="messages#returnToLatest" data-messages-target="latest" hidden="hidden">{down}<span class="for-screen-reader">Jump to newest message</span></button>
+</div>
+
+"""
+xx

@@ -1,0 +1,87 @@
+/// lib/platform.gbln
+/// ApplicationPlatform (PlatformAgent over the useragent gem) and Rails'
+/// allow_browser, reduced to the browsers and systems Campfire asks about.
+
+act parse(ua)
+    browser | ""
+    version | ""
+    if :is_matching(ua, "Edg(e|A|iOS)?/")
+        browser |= "Edge"
+        version |= first_match(ua, "Edg(?:e|A|iOS)?/([0-9.]+)")
+    elif :is_matching(ua, "OPR/|Opera")
+        browser |= "Opera"
+        version |= first_match(ua, "(?:OPR|Version)/([0-9.]+)")
+    elif :is_matching(ua, "Firefox/|FxiOS/")
+        browser |= "Firefox"
+        version |= first_match(ua, "(?:Firefox|FxiOS)/([0-9.]+)")
+    elif :is_matching(ua, "Chrome/|CriOS/")
+        browser |= "Chrome"
+        version |= first_match(ua, "(?:Chrome|CriOS)/([0-9.]+)")
+    elif :is_matching(ua, "Safari/")
+        browser |= "Safari"
+        version |= first_match(ua, "Version/([0-9.]+)")
+    elif :is_matching(ua, "MSIE|Trident/")
+        browser |= "Internet Explorer"
+    else
+        browser |= first_match(ua, "^([^/ ]+)")
+    xx
+    platform | ""
+    for p in ["Android", "iPad", "iPhone", "Macintosh", "Windows", "CrOS", "X11", "Linux"]
+        if platform == "" and :has(ua, p) => platform |= p
+    xx
+    os | ""
+    names | {"Android": "Android", "iPad": "iPad", "iPhone": "iPhone", "Macintosh": "macOS", "Windows": "Windows", "CrOS": "ChromeOS", "X11": "Linux", "Linux": "Linux"}
+    if platform != "" => os |= names[platform]
+    return {
+        "ua": ua,
+        "browser": browser,
+        "version": version,
+        "ios": :is_matching(ua, "iPhone|iPad"),
+        "android": :has(ua, "Android"),
+        "mac": :has(ua, "Macintosh"),
+        "chrome": browser == "Chrome",
+        "firefox": browser == "Firefox",
+        "safari": browser == "Safari",
+        "edge": browser == "Edge",
+        "windows": os == "Windows",
+        "os": os,
+        "apple_messages": :is_matching(ua, "(?i)facebookexternalhit") and :is_matching(ua, "(?i)Twitterbot")
+    }
+xx
+
+act first_match(s, pattern)
+    if :is_matching(s, pattern) == false => return ""
+    found | :get_matching(s, pattern)
+    if :len(found) == 0 => return ""
+    whole | found[0]
+    /// get_matching returns whole matches; strip the prefix up to the group.
+    return :update_matching(whole, pattern, "$1")
+xx
+
+act mobile(p)
+    return p["ios"] or p["android"]
+xx
+
+act desktop(p)
+    return mobile(p) == false
+xx
+
+/// The leading number of a dotted version, as a float ("17.2.1" -> 17.2).
+act version_number(v)
+    if v == "" => return 0
+    parts | :split(v, ".")
+    if :len(parts) == 1 => return :float(parts[0])
+    return :float(parts[0] + "." + parts[1])
+xx
+
+/// allow_browser versions: { safari: 17.2, chrome: 120, firefox: 121, opera: 104, ie: false }
+act allowed(p)
+    b | p["browser"]
+    n | version_number(p["version"])
+    if b == "Internet Explorer" => return false
+    if b == "Safari" and p["version"] != "" => return n >= 17.2
+    if b == "Chrome" => return n >= 120
+    if b == "Firefox" => return n >= 121
+    if b == "Opera" => return n >= 104
+    return true
+xx

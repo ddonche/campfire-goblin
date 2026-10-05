@@ -1,0 +1,138 @@
+/// lib/html.gbln
+/// HTML helpers shared by the views: escaping, asset tags and the small
+/// Rails view helpers Campfire's templates lean on.
+
+import lib/assets as assets
+
+act h(s)
+    if s == nil => return ""
+    return :escape_html(:str(s))
+xx
+
+/// s without its last n characters
+act chop(s, n)
+    k | :len(s) - n
+    if k <= 0 => return ""
+    return s[0:k]
+xx
+
+act asset(name)
+    return assets::path(name)
+xx
+
+/// image_tag with Rails' attribute order: the given attributes, then src,
+/// then width/height when a size is given (size 0 means none).
+act img(name, attrs, size)
+    src | asset(name)
+    if size == 0 => return "<img {attrs}src=\"{src}\" />"
+    return "<img {attrs}src=\"{src}\" width=\"{size}\" height=\"{size}\" />"
+xx
+
+act img_src(src, attrs, size)
+    if size == 0 => return "<img {attrs}src=\"{src}\" />"
+    return "<img {attrs}src=\"{src}\" width=\"{size}\" height=\"{size}\" />"
+xx
+
+/// Rails' tag.time datetime: ..., data: { local_time_target: style }
+act local_time(iso, style, klass)
+    if klass == "" => return "<time datetime=\"{iso}\" data-local-time-target=\"{style}\"></time>"
+    return "<time class=\"{klass}\" datetime=\"{iso}\" data-local-time-target=\"{style}\"></time>"
+xx
+
+act hidden_token(token)
+    return "<input type=\"hidden\" name=\"authenticity_token\" value=\"{token}\" />"
+xx
+
+/// Rails' button_to: a one-button form; non-POST methods ride in _method.
+act button_to(url, method, form_attrs, button_attrs, inner, token)
+    m | ""
+    if method != "post" => m |= "<input type=\"hidden\" name=\"_method\" value=\"{method}\" />"
+    return "<form class=\"button_to\" method=\"post\" action=\"{url}\"{form_attrs}>{m}<button{button_attrs} type=\"submit\">{inner}</button>" + hidden_token(token) + "</form>"
+xx
+
+act dom_id(prefix, kind, id)
+    if prefix == "" => return kind + "_" + :str(id)
+    return prefix + "_" + kind + "_" + :str(id)
+xx
+
+/// Room#to_key for STI rooms: rooms_open_1, rooms_closed_1, rooms_direct_1
+act room_key(room)
+    t | room["type"]
+    if t == "Rooms::Open" => return "rooms_open_" + :str(room["id"])
+    if t == "Rooms::Closed" => return "rooms_closed_" + :str(room["id"])
+    return "rooms_direct_" + :str(room["id"])
+xx
+
+/// Array#to_sentence
+act to_sentence(items, two_words)
+    n | :len(items)
+    if n == 0 => return ""
+    if n == 1 => return items[0]
+    if n == 2 => return items[0] + two_words + items[1]
+    out | ""
+    i | 0
+    while i < n - 1
+        if i > 0 => out |= out + ", "
+        out |= out + items[i]
+        i |= i + 1
+    xx
+    return out + ", and " + items[n - 1]
+xx
+
+act capitalize(s)
+    if s == "" => return s
+    return :upper(s[0:1]) + :lower(s[1:])
+xx
+
+/// ---------- translations (TranslationsHelper) ----------
+
+FLAGS | ["🇺🇸", "🇪🇸", "🇫🇷", "🇮🇳", "🇩🇪", "🇧🇷", "🇯🇵"]
+TRANSLATIONS | {
+    "email_address": ["Enter your email address", "Introduce tu correo electrónico", "Entrez votre adresse courriel", "अपना ईमेल पता दर्ज करें", "Geben Sie Ihre E-Mail-Adresse ein", "Insira seu endereço de email", "メールアドレスを入力してください"],
+    "password": ["Enter your password", "Introduce tu contraseña", "Saisissez votre mot de passe", "अपना पासवर्ड दर्ज करें", "Geben Sie Ihr Passwort ein", "Insira sua senha", "パスワードを入力してください"],
+    "update_password": ["Change password", "Cambiar contraseña", "Changer le mot de passe", "पासवर्ड बदलें", "Passwort ändern", "Alterar senha", "パスワードを変更"],
+    "user_name": ["Enter your name", "Introduce tu nombre", "Entrez votre nom", "अपना नाम दर्ज करें", "Geben Sie Ihren Namen ein", "Insira seu nome", "お名前を入力してください"],
+    "account_name": ["Name this account", "Nombre de esta cuenta", "Nommez ce compte", "इस खाते का नाम दें", "Benennen Sie dieses Konto", "Dê um nome a essa conta", "アカウントに名前を付ける"],
+    "room_name": ["Name the room", "Nombrar la sala", "Nommez la salle", "कमरे का नाम दें", "Geben Sie dem Raum einen Namen", "Dê um nome a essa sala", "ルームに名前を付ける"],
+    "invite_message": ["Welcome to Campfire. To invite some people to chat with you, share the join link below.", "Bienvenido a Campfire. Para invitar a algunas personas a chatear contigo, comparte el enlace de unión que se encuentra a continuación.", "Bienvenue sur Campfire. Pour inviter des personnes à discuter avec vous, partagez le lien pour rejoindre ci-dessous.", "Campfire में आपका स्वागत है। अधिक लोगों को चैट के लिए आमंत्रित करने के लिए, नीचे जुड़ने का लिंक साझा करें।", "Willkommen bei Campfire. Um einige Personen zum Chatten einzuladen, teilen Sie den unten stehenden Beitrittslink.", "Boas vindas ao Campfire. Para convidar pessoas para conversarem com você, compartilhe o link de convite abaixo.", "Campfireへようこそ。他の人をチャットに招待するには、下記の参加リンクを共有してください。"],
+    "incompatible_browser_messsage": ["Upgrade to a supported web browser. Campfire requires a modern web browser. Please use one of the browsers listed below and make sure auto-updates are enabled.", "Actualiza a un navegador web compatible. Campfire requiere un navegador web moderno. Utiliza uno de los navegadores listados a continuación y asegúrate de que las actualizaciones automáticas estén habilitadas.", "Mettez à jour vers un navigateur web pris en charge. Campfire nécessite un navigateur web moderne. Veuillez utiliser l'un des navigateurs répertoriés ci-dessous et assurez-vous que les mises à jour automatiques sont activées.", "समर्थित वेब ब्राउज़र में अपग्रेड करें। Campfire को एक आधुनिक वेब ब्राउज़र की आवश्यकता है। कृपया नीचे सूचीबद्ध ब्राउज़रों में से कोई एक का उपयोग करें और सुनिश्चित करें कि स्वचालित अपडेट्स सक्षम हैं।", "Aktualisieren Sie auf einen unterstützten Webbrowser. Campfire erfordert einen modernen Webbrowser. Verwenden Sie bitte einen der unten aufgeführten Browser und stellen Sie sicher, dass automatische Updates aktiviert sind.", "Atualize para um navegador compatível. O Campfire requer um navegador moderno. Por favor, use um dos navegadores listados abaixo e certifique-se de que as atualizações automáticas estão ativadas.", "サポートされたウェブブラウザーにアップグレードしてください。Campfireはモダンなウェブブラウザーが必要です。下記のブラウザーのいずれかを使用し、自動更新が有効になっていることを確認してください。"],
+    "bio": ["Enter a few words about yourself.", "Ingresa algunas palabras sobre ti mismo.", "Saisissez quelques mots à propos de vous-même.", "अपने बारे में कुछ शब्द लिखें.", "Geben Sie ein paar Worte über sich selbst ein.", "Insira alguma palavras sobre você.", "ご自分について簡単に記入してください。"],
+    "webhook_url": ["Webhook URL", "URL del Webhook", "URL du webhook", "वेबहुक URL", "Webhook-URL", "URL do Webhook", "Webhook URL"],
+    "chat_bots": ["Chat bots. With Chat bots, other sites and services can post updates directly to Campfire.", "Bots de chat. Con los bots de chat, otros sitios y servicios pueden publicar actualizaciones directamente en Campfire.", "Bots de discussion. Avec les bots de discussion, d'autres sites et services peuvent publier des mises à jour directement sur Campfire.", "चैट बॉट। चैट बॉट के साथ, अन्य साइटों और सेवाएं सीधे कैम्पफायर में अपडेट पोस्ट कर सकती हैं।", "Chat-Bots. Mit Chat-Bots können andere Websites und Dienste Updates direkt in Campfire veröffentlichen.", "Chat bots. Com Chat bots, outros sites e serviços podem postar atualizações diretamente no Campfire.", "チャットボット。チャットボットを使用すると、他のサイトやサービスがCampfireに直接更新情報を投稿できます。"],
+    "bot_name": ["Name the bot", "Nombrar al bot", "Nommer le bot", "बॉट का नाम दें", "Benenne den Bot", "Dê um nome ao bot", "ボットに名前を付ける"],
+    "custom_styles": ["Add custom CSS styles. Use Caution: you could break things.", "Agrega estilos CSS personalizados. Usa precaución: podrías romper cosas.", "Ajoutez des styles CSS personnalisés. Utilisez avec précaution : vous pourriez casser des choses.", "कस्टम CSS स्टाइल जोड़ें। सावधानी बरतें: आप चीज़ों को तोड़ सकते हैं।", "Fügen Sie benutzerdefinierte CSS-Stile hinzu. Vorsicht: Sie könnten Dinge kaputt machen.", "Adicione estilos CSS personalizados. Use com cuidado: você pode quebrar coisas.", "カスタムCSSスタイルを追加。注意: サイトが壊れる可能性があります。"]
+}
+
+act translation_button(key)
+    globe | img("globe.svg", "aria-hidden=\"true\" class=\"color-icon\" ", 20)
+    list | ""
+    texts | TRANSLATIONS[key]
+    i | 0
+    for flag in FLAGS
+        t | h(texts[i])
+        list |= list + "<dt>{flag}</dt><dd class=\"margin-none\">{t}</dd>"
+        i |= i + 1
+    xx
+    return "<details class=\"position-relative\" data-controller=\"popup\" data-action=\"keydown.esc-&gt;popup#close toggle-&gt;popup#toggle click@document-&gt;popup#closeOnClickOutside\" data-popup-orientation-top-class=\"popup-orientation-top\"><summary class=\"btn\" tabindex=\"-1\">{globe}<span class=\"for-screen-reader\">Translate</span></summary><div class=\"language-list-menu shadow\" data-popup-target=\"menu\"><dl class=\"language-list\">{list}</dl></div></details>"
+xx
+
+/// ---------- avatars ----------
+
+/// avatar_tag(user): link to the profile wrapping the avatar image.
+act avatar_tag(user, extra)
+    id | user["id"]
+    title | h(user["title"])
+    src | user["avatar"]
+    return "<a title=\"{title}\" class=\"btn avatar\" data-turbo-frame=\"_top\" href=\"/users/{id}\"><img aria-hidden=\"true\" {extra}src=\"{src}\" width=\"48\" height=\"48\" /></a>"
+xx
+
+act account_logo_tag(account, style)
+    v | account["v"]
+    return "<figure class=\"account-logo avatar {style}\"><img alt=\"Account logo\" src=\"/account/logo?v={v}\" width=\"300\" height=\"300\" /></figure>"
+xx
+
+/// :get_matching raises when nothing matches; this returns [] instead.
+act matches(s, pattern)
+    if :is_matching(s, pattern) == false => return []
+    return :get_matching(s, pattern)
+xx

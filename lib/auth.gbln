@@ -1,0 +1,197 @@
+/// lib/auth.gbln
+/// Sessions, CSRF protection and the per-request context (Campfire's
+/// Authentication concern and Current).
+///
+/// The session cookie holds the sessions.token value. Rails signs that cookie;
+/// Goblin has no HMAC builtin, and the token is already an unguessable secret
+/// checked against the database, so it is stored as is. CSRF uses one random
+/// token per browser kept in a cookie (Rails keeps it in the encrypted session
+/// cookie) and compares it with the authenticity_token form field or the
+/// X-CSRF-Token header.
+
+import lib/http as http
+import lib/db as db
+
+BASE58 | ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
+URLSAFE | ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "_"]
+ALNUM | ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
+SESSION_COOKIE | "session_token"
+CSRF_COOKIE | "_campfire_csrf"
+
+act random_from(alphabet, n)
+    out | ""
+    top | :len(alphabet) - 1
+    i | 0
+    while i < n
+        k | :secure_random(0, top)
+        out |= out + alphabet[k]
+        i |= i + 1
+    xx
+    return out
+xx
+
+/// has_secure_token (24 base58 characters)
+act secure_token()
+    return random_from(BASE58, 24)
+xx
+
+/// SecureRandom.alphanumeric(n)
+act alphanumeric(n)
+    return random_from(ALNUM, n)
+xx
+
+act csrf_token()
+    return random_from(URLSAFE, 43)
+xx
+
+CONTEXT_SQL | """
+select json_build_object(
+  'account', (
+    select json_build_object('id', a.id, 'name', a.name, 'join_code', a.join_code,
+      'custom_styles', a.custom_styles, 'settings', coalesce(a.settings, '{}'::json), 'v', campfire_number(a.updated_at),
+      'has_logo', exists (select 1 from active_storage_attachments x where x.record_type = 'Account' and x.record_id = a.id and x.name = 'logo'))
+    from accounts a order by a.id limit 1),
+  'user', (
+    select campfire_user_json(u)::jsonb || jsonb_build_object('session_id', s.id,
+      'stale', s.last_active_at < utc_now() - interval '1 hour')
+    from sessions s join users u on u.id = s.user_id where s.token = $1),
+  'bot', (
+    select campfire_user_json(u) from users u
+    where $2 <> '' and u.role = 2 and u.status = 0
+      and u.id::text = split_part($2, '-', 1) and u.bot_token = split_part($2, '-', 2)))
+"""
+
+/// Builds the request context: request, account, signed-in user, CSRF token
+/// and the response cookies the request owes the browser.
+act context(req)
+    token | http::cookie_of(req, SESSION_COOKIE)
+    bot_key | :trim(http::param(req, "bot_key"))
+    data | db::doc(CONTEXT_SQL, [token, bot_key])
+    csrf | http::cookie_of(req, CSRF_COOKIE)
+    new_csrf | false
+    if csrf == ""
+        csrf |= csrf_token()
+        new_csrf |= true
+    xx
+    user | data["user"]
+    by | ""
+    if user != nil
+        by |= "session"
+        if user["stale"]
+            db::exec("update sessions set last_active_at = utc_now(), updated_at = utc_now(), user_agent = $2, ip_address = $3 where id = $1", [user["session_id"], req["user_agent"], req["ip"]])
+        xx
+    elif data["bot"] != nil
+        user |= data["bot"]
+        by |= "bot_key"
+    xx
+    flash | {}
+    raw_flash | http::cookie_of(req, "_campfire_flash")
+    if raw_flash != ""
+        if :starts_with(raw_flash, "\{")
+            flash |= :json_parse(raw_flash)
+        xx
+    xx
+    return {
+        "req": req,
+        "account": data["account"],
+        "user": user,
+        "authenticated_by": by,
+        "session_token": token,
+        "csrf": csrf,
+        "new_csrf": new_csrf,
+        "flash": flash,
+        "had_flash": raw_flash != "",
+        "next_flash": nil
+    }
+xx
+
+act signed_in(c)
+    return c["user"] != nil
+xx
+
+act is_admin(c)
+    u | c["user"]
+    if u == nil => return false
+    return u["role"] == 1
+xx
+
+/// User#can_administer?(record): administrators, or the record's creator.
+act can_administer(c, creator_id)
+    u | c["user"]
+    if u == nil => return false
+    if u["role"] == 1 => return true
+    return u["id"] == creator_id
+xx
+
+/// protect_from_forgery with: :exception, unless bot_key
+act verified_request(c)
+    req | c["req"]
+    m | req["method"]
+    if m == "GET" or m == "HEAD" => return true
+    if c["authenticated_by"] == "bot_key" => return true
+    expected | c["csrf"]
+    if c["new_csrf"] => return false
+    given | http::param(req, "authenticity_token")
+    if given == "" => given |= http::header("x-csrf-token")
+    return given != "" and given == expected
+xx
+
+/// Cookies every response carries: the CSRF cookie when it is new, the
+/// session cookie refreshed on each authenticated request (Rails'
+/// authenticated_as sets it on resume, too), and flash bookkeeping.
+act finish(c, res)
+    if c["new_csrf"]
+        res |= http::add_cookie(res, CSRF_COOKIE, c["csrf"], "; path=/; httponly; samesite=lax")
+    xx
+    if c["authenticated_by"] == "session"
+        res |= http::set_permanent_cookie(res, SESSION_COOKIE, c["session_token"], true)
+    xx
+    nf | c["next_flash"]
+    if nf != nil
+        res |= http::add_cookie(res, "_campfire_flash", http::url_encode(:json_stringify(nf)), "; path=/; httponly; samesite=lax")
+    elif c["had_flash"]
+        res |= http::delete_cookie(res, "_campfire_flash")
+    xx
+    return res
+xx
+
+/// flash[:notice] / flash[:alert] for the next request.
+act flash_next(c, kind, message)
+    f | {}
+    :update!(f[kind], message)
+    :update!(c["next_flash"], f)
+    return c
+xx
+
+/// The flash for this request; reading it consumes it.
+act flash_now(c, kind, message)
+    f | c["flash"]
+    :update!(f[kind], message)
+    :update!(c["flash"], f)
+    return c
+xx
+
+/// Sessions::start! then authenticated_as
+act start_session(c, user_id)
+    token | secure_token()
+    req | c["req"]
+    db::exec("insert into sessions (token, user_id, user_agent, ip_address, last_active_at, created_at, updated_at) values ($1, $2, $3, $4, utc_now(), utc_now(), utc_now())", [token, user_id, req["user_agent"], req["ip"]])
+    :update!(c["session_token"], token)
+    :update!(c["authenticated_by"], "session")
+    return c
+xx
+
+/// Controllers get a copy of the context; one that changed it (flash,
+/// session) hands it back on the response for finish() to use.
+act keep(c, res)
+    :update!(res["context"], c)
+    return res
+xx
+
+act terminate_session(c, res)
+    db::exec("delete from sessions where token = $1", [c["session_token"]])
+    :update!(c["authenticated_by"], "")
+    res |= http::delete_cookie(res, SESSION_COOKIE)
+    return keep(c, res)
+xx

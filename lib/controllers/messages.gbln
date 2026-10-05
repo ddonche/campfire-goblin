@@ -1,0 +1,55 @@
+/// lib/controllers/messages.gbln -- MessagesController
+
+import lib/http as http
+import lib/auth as auth
+import lib/db as db
+import lib/views/messages as message_views
+
+/// A page of messages for the scrollback paginator. $3/$4 are the message
+/// to page before/after (0 when absent).
+PAGE_SQL | """
+select json_build_object(
+  'room_id', mb.room_id,
+  'messages', (
+    select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from (
+      select * from (select * from messages where room_id = mb.room_id and $3 = 0 and $4 = 0 order by created_at desc, id desc limit 40) last_page
+      union all
+      select * from (select m.* from messages m, messages a where a.id = $3 and a.room_id = mb.room_id and m.room_id = mb.room_id
+                     and m.created_at < a.created_at order by m.created_at desc, m.id desc limit 40) before_page
+      union all
+      select * from (select m.* from messages m, messages a where a.id = $4 and a.room_id = mb.room_id and m.room_id = mb.room_id
+                     and m.created_at > a.created_at order by m.created_at, m.id limit 40) after_page
+    ) x),
+  'missing', ($3 <> 0 and not exists (select 1 from messages where id = $3 and room_id = mb.room_id))
+          or ($4 <> 0 and not exists (select 1 from messages where id = $4 and room_id = mb.room_id)))
+from memberships mb where mb.user_id = $1 and mb.room_id = $2
+"""
+
+act numeric(s)
+    return :is_matching(s, "^[0-9]+$")
+xx
+
+act int_param(req, name)
+    v | http::param(req, name)
+    if v == "" => return 0
+    if numeric(v) == false => return -1
+    return :int(v)
+xx
+
+/// GET /rooms/:room_id/messages?before=|after=
+act index(c, room_id)
+    req | c["req"]
+    if numeric(room_id) == false => return http::text(404, "Not Found")
+    before | int_param(req, "before")
+    after | int_param(req, "after")
+    if before < 0 or after < 0 => return http::text(404, "Not Found")
+    data | db::doc(PAGE_SQL, [c["user"]["id"], :int(room_id), before, after])
+    if data == nil or data["missing"] => return http::text(404, "Not Found")
+    list | data["messages"]
+    if :len(list) == 0 => return http::head(204)
+    return http::html("\n" + message_views::collection(c, list))
+xx
+
+act create(c, room_id)
+    return http::text(501, "Not Implemented")
+xx

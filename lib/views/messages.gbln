@@ -1,0 +1,273 @@
+/// lib/views/messages.gbln
+/// messages/_message, _actions, _presentation, _template and boosts/_boost(s).
+
+import lib/html as html
+import lib/content as content
+
+REACTIONS | [["👍", "Thumbs up"], ["👏", "Clapping"], ["👋", "Waving hand"], ["💪", "Muscle"], ["❤️", "Red heart"], ["😂", "Face with tears of joy"], ["🎉", "Party popper"], ["🔥", "Fire"]]
+
+/// Message#to_key is [client_message_id], so dom ids use it.
+act dom(m, prefix)
+    key | m["client_message_id"]
+    if prefix == "" => return "message_" + key
+    return prefix + "_message_" + key
+xx
+
+/// room_display_name(room, for_user:)
+act room_name(room, for_user_id)
+    if room["type"] != "Rooms::Direct" => return room["name"]
+    names | []
+    for u in room["members"]
+        if u["id"] != for_user_id => :put_last!(names, u["name"])
+    xx
+    s | html::to_sentence(names, " and ")
+    if s == "" and for_user_id != nil
+        for u in room["members"]
+            if u["id"] == for_user_id => s |= u["name"]
+        xx
+    xx
+    return s
+xx
+
+act boost(c, b, message_id)
+    booster | b["booster"]
+    bid | b["id"]
+    booster_id | booster["id"]
+    btitle | html::h(booster["title"])
+    bavatar | booster["avatar"]
+    label | html::h(booster["name"] + " boosted " + b["content"])
+    text | html::h(b["content"])
+    klass | "txt-small"
+    if content::all_emoji(b["content"]) => klass |= "txt-small txt-medium"
+    minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
+    token | c["csrf"]
+    return """  <div id="boost_{bid}"
+      class="boost boost-item flex-inline postion--relative max-width align-center fill-white gap"
+      data-controller="boost-delete" data-boost-delete-perform-class="boost--deleting" data-boost-delete-reveal-class="expanded" data-boost-delete-booster-id-value="{booster_id}">
+    <figure class="avatar boost__avatar flex-item-no-shrink">
+      <a title="{btitle}" class="btn avatar" data-turbo-frame="_top" href="/users/{booster_id}"><img aria-label="{label}" src="{bavatar}" width="48" height="48" /></a>
+    </figure>
+
+    <span role="button" class="{klass}" data-action="click-&gt;boost-delete#reveal keydown.enter-&gt;boost-delete#reveal:prevent" data-boost-delete-target="content">{text}</span>
+
+    <form class="button_to" method="post" action="/messages/{message_id}/boosts/{bid}"><input type="hidden" name="_method" value="delete" /><button data-action="boost-delete#perform" data-boost-delete-target="button" class="btn btn--negative flex-item-justify-end boost__delete" type="submit">
+      {minus}
+      <span class="for-screen-reader">Delete this boost</span>
+</button><input type="hidden" name="authenticity_token" value="{token}" /></form>  </div>
+  <span id="delete_boost_accessible_label" class="for-screen-reader">Press enter to delete this boost</span>
+"""
+xx
+
+act boosts(c, m)
+    boosting | dom(m, "boosting")
+    boosts_id | dom(m, "boosts")
+    new_boost | dom(m, "new_boost")
+    id | m["id"]
+    list | ""
+    for b in m["boosts"]
+        list |= list + boost(c, b, id)
+    xx
+    icon | html::img("boost.svg", "aria-hidden=\"true\" ", 20)
+    return """<turbo-frame id="{boosting}">
+  <div class="boosts flex flex-wrap align-center gap full-width" style="--column-gap: 0.4ch; --row-gap: 0"
+      data-controller="turbo-streaming" data-action="turbo:submit-start->turbo-streaming#unsubscribe">
+    <div class="flex-inline flex-wrap gap" id="{boosts_id}" data-turbo-streaming-target="container">
+      {list}
+    </div>
+
+    <turbo-frame id="{new_boost}">
+      <div class="flex-inline message__boost-inline" data-controller="soft-keyboard">
+        <a class="boost__action txt-small btn" action="soft-keyboard#open" href="/messages/{id}/boosts/new">
+          {icon}
+          <span class="for-screen-reader">Add a boost</span>
+</a>      </div>
+</turbo-frame>  </div>
+</turbo-frame>
+"""
+xx
+
+act presentation(c, m)
+    pid | dom(m, "presentation")
+    body | content::presentation(c, m)
+    return """<div id="{pid}" dir="auto" data-reply-target="body" data-messages-target="body">
+  {body}
+</div>
+"""
+xx
+
+act actions(c, m, url)
+    boosting | dom(m, "boosting")
+    new_boost | dom(m, "new_boost")
+    edit | dom(m, "edit")
+    id | m["id"]
+    room_id | m["room_id"]
+    token | c["csrf"]
+    dots | html::img("menu-dots-horizontal.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+    forms | []
+    for r in REACTIONS
+        ch | r[0]
+        title | r[1]
+        :put_last!(forms, """<form data-turbo-frame="{boosting}" data-action="popup#close" action="/messages/{id}/boosts" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="{token}" />
+            <input type="hidden" name="boost[content]" id="boost_content" value="{ch}" />
+            <button name="button" type="submit" title="{title}" class="btn message__action-btn" data-emoji="{ch}">
+              <figure class="margin-none boost-character">{ch}</figure>
+              <span class="for-screen-reader">{title}</span>
+</button></form>""")
+    xx
+    quick | :join(forms, "          ")
+    boost_icon | html::img("boost.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+    grid | ""
+    att | m["attachment"]
+    if att != nil
+        download | html::img("download.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+        share | html::img("share.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+        dl | html::h(att["path"] + "?disposition=attachment")
+        sp | html::h(att["path"])
+        fname | html::h(att["filename"])
+        grid |= """          <a class="btn message__action-btn center full-width hide-in-ios-pwa" title="Download" aria-label="Download" href="{dl}">
+            {download}
+</a>
+          <button class="btn message__action-btn center full-width" data-controller="web-share" data-action="web-share#share" data-web-share-files-value="{sp}" data-web-share-title-value="{fname}" title="Share" aria-label="Share">
+            {share}
+</button>"""
+    else
+        reply | html::img("reply.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+        grid |= """          <button class="btn message__action-btn center full-width" data-action="reply#reply" title="Reply" aria-label="Reply">
+            {reply}
+</button>"""
+    xx
+    link | html::img("link.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+    pencil | html::img("pencil.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
+    return """
+<div class="message__actions" data-controller="soft-keyboard">
+  <details class="position-relative" data-controller="popup" data-action="keydown.esc-&gt;popup#close toggle-&gt;popup#toggle click@document-&gt;popup#closeOnClickOutside" data-popup-orientation-top-class="popup-orientation-top">
+    <summary class="btn message__action-btn message__options-btn">
+      {dots}
+      <span class="for-screen-reader">Message options</span>
+    </summary>
+
+    <div class="message__actions-menu border shadow" data-popup-target="menu">
+      <div class="quick-boosts">
+          {quick}
+        <a class="btn message__action-btn message__boost-btn" data-turbo-frame="{new_boost}" data-action="soft-keyboard#open popup#close" href="/messages/{id}/boosts/new">
+          {boost_icon}
+          <span class="for-screen-reader">New boost</span>
+</a>      </div>
+
+      <div class="flex flex-wrap border-top margin-block-start-half pad-block-start-half message__actions-grid">
+{grid}
+        <button class="btn message__action-btn center full-width" title="Copy link" aria-label="Copy link" data-controller="copy-to-clipboard" data-action="copy-to-clipboard#copy" data-copy-to-clipboard-success-class="btn--success" data-copy-to-clipboard-content-value="{url}">
+          {link}
+</button>
+        <a class="btn message__action-btn center full-width message__edit-btn" data-turbo-frame="{edit}" title="Edit" aria-label="Edit" href="/rooms/{room_id}/messages/{id}/edit">
+          {pencil}
+</a>      </div>
+    </div>
+</details></div>
+"""
+xx
+
+/// messages/_message (the inner part of the cache block)
+act message(c, m)
+    id | m["id"]
+    mid | dom(m, "")
+    edit | dom(m, "edit")
+    creator | m["creator"]
+    creator_id | creator["id"]
+    room | m["room"]
+    room_id | room["id"]
+    emoji | ""
+    if content::all_emoji(content::plain_text(m)) => emoji |= "message--emoji"
+    ts | m["created_epoch"]
+    upd | m["updated_epoch"]
+    iso | m["created_iso"]
+    avatar | html::avatar_tag(creator, "")
+    title | html::h(creator["title"])
+    name | html::h(creator["name"])
+    permalink | "/rooms/{room_id}/@{id}"
+    rname | html::h(room_name(room, nil))
+    base | c["req"]["base"]
+    acts | actions(c, m, base + permalink)
+    pres | presentation(c, m)
+    bst | boosts(c, m)
+    return """  <div id="{mid}" class="message {emoji}" data-controller="reply" data-user-id="{creator_id}" data-message-id="{id}" data-message-timestamp="{ts}" data-message-updated-at="{upd}" data-sort-value="{ts}" data-messages-target="message" data-search-results-target="message" data-refresh-room-target="message" data-reply-composer-outlet="#composer">
+    <h2 class="message__day-separator"><time datetime="{iso}" data-local-time-target="date"></time></h2>
+
+    <figure class="avatar message__avatar">
+      {avatar}
+    </figure>
+
+    <turbo-frame id="{edit}">
+      <div class="message__body">
+        <div class="message__body-content">
+          <div class="message__meta">
+            <h3 class="message__heading">
+              <span class="message__author" title="{title}">
+                <strong data-reply-target="author">{name}</strong>
+              </span>
+              <a target="_top" class="message__permalink" href="{permalink}"><time class="message__timestamp" datetime="{iso}" data-local-time-target="time"></time></a>
+              <span class="message__room">
+                <a target="_top" data-reply-target="link" href="{permalink}">{rname}</a>
+              </span>
+            </h3>
+            {acts}
+          </div>
+          {pres}
+          {bst}        </div>
+      </div>
+    </turbo-frame>
+</div>
+"""
+xx
+
+act collection(c, messages)
+    out | ""
+    for m in messages
+        out |= out + message(c, m)
+    xx
+    return out
+xx
+
+/// messages/_template (the client-side template for pending messages)
+act template(c)
+    u | c["user"]
+    uid | u["id"]
+    avatar | html::avatar_tag(u, "")
+    name | html::h(u["name"])
+    dots | html::img("menu-dots-horizontal.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 0)
+    return """<script type="text/template" data-messages-target="template">
+  <div class="message message--me $messageClasses$"
+      id="message_$clientMessageId$"
+      data-format-message-target="message"
+      data-user-id="{uid}"
+      data-message-timestamp="$messageTimestamp$"
+      data-messages-target="message">
+    <div class="message__day-separator"><time class="message__timestamp" datetime="$messageDatetime$" data-local-time-target="date"></time></div>
+
+    <figure class="avatar message__avatar">
+      {avatar}
+    </figure>
+
+    <div class="message__body">
+      <div class="message__body-content">
+        <div class="message__meta">
+          <h3 class="message__heading">
+            <span class="message__author"><strong>{name}</strong></span>
+            <span class="message__permalink"><time class="message__timestamp" datetime="$messageDatetime$" data-local-time-target="time"></time></span>
+          </h3>
+          <div class="message__actions">
+            <div class="position-relative">
+              <span class="btn message__action-btn message__options-btn">
+                {dots}
+                <span class="for-screen-reader">Message options</span>
+              </span>
+            </div class="position-relative">
+          </div>
+        </div>
+        $body$
+      </div>
+    </div>
+  </div>
+</script>
+"""
+xx

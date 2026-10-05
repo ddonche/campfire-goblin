@@ -1,0 +1,159 @@
+/// lib/views/layout.gbln -- layouts/application.html.erb and _lightbox
+
+import lib/html as html
+
+HEAD_ASSETS | :read_text("lib/head_assets.html")
+
+act page(title)
+    return {"title": title, "head": "", "nav": "", "main": "", "footer": "", "sidebar": "", "body_class": ""}
+xx
+
+act lightbox()
+    remove | html::img("remove.svg", "aria-hidden=\"true\" ", 0)
+    download | html::img("download.svg", "aria-hidden=\"true\" ", 0)
+    share | html::img("share.svg", "aria-hidden=\"true\" ", 0)
+    return """<dialog class="lightbox" aria-label="Image Viewer (Press escape to close)" data-lightbox-target="dialog" data-action="close->lightbox#reset">
+  <img src="" class="lightbox__image" data-lightbox-target="zoomedImage" />
+
+  <form method="dialog" class="lightbox__btn">
+    <button class="btn">
+      {remove}
+      <span class="for-screen-reader">Close image viewer</span>
+    </button>
+  </form>
+
+  <a href="" class="lightbox__btn--download btn hide-in-ios-pwa" data-lightbox-target="download">
+    {download}
+    <span class="for-screen-reader">Download file</span>
+  </a>
+
+  <button class="lightbox__btn--share btn"
+      data-controller="web-share"
+      data-action="web-share#share"
+      data-web-share-files-value=""
+      data-lightbox-target="share">
+    {share}
+    <span class="for-screen-reader">Share file</span>
+  </button>
+</dialog>
+"""
+xx
+
+act flash_html(c)
+    f | c["flash"]
+    notice | ""
+    alert | false
+    if :has(f, "notice") => notice |= f["notice"]
+    if :has(f, "alert")
+        notice |= f["alert"]
+        alert |= true
+    xx
+    if notice == "" => return ""
+    style | ""
+    icon | html::img("check.svg", "aria-hidden=\"true\" class=\"colorize--white\" ", 24)
+    if alert
+        style |= "--flash-background: var(--color-negative)"
+        icon |= html::img("alert.svg", "aria-hidden=\"true\" class=\"colorize--white\" ", 24)
+    xx
+    text | html::h(notice)
+    return """      <div class="flash" data-controller="element-removal" data-action="animationend->element-removal#remove">
+        <div class="flash__inner shadow" style="{style}">
+            {icon}</span>
+        </div>
+        <span class="for-screen-reader" role="alert" aria-atomic="true">{text}</span>
+      </div>
+"""
+xx
+
+act render(c, p)
+    title | html::h(p["title"])
+    csrf | c["csrf"]
+    account | c["account"]
+    v | account["v"]
+    user_meta | ""
+    body_classes | []
+    if p["body_class"] != "" => :put_last!(body_classes, p["body_class"])
+    u | c["user"]
+    if u != nil
+        uid | u["id"]
+        uname | html::h(u["name"])
+        user_meta |= "<meta name=\"current-user-id\" content=\"{uid}\" /><meta name=\"current-user-name\" content=\"{uname}\" />"
+        if u["role"] == 1 => :put_last!(body_classes, "admin")
+    xx
+    if account["has_logo"] => :put_last!(body_classes, "account-has-logo")
+    body_class | :join(body_classes, " ")
+    assets | HEAD_ASSETS
+    styles | account["custom_styles"]
+    if styles != nil and styles != ""
+        marker | "\n    \n\n    <script type=\"importmap\""
+        at | :find(assets, marker)
+        if at != nil
+            assets |= assets[0:at] + "\n    <style data-turbo-track=\"reload\">" + styles + "</style>\n\n    <script type=\"importmap\"" + assets[at + :len(marker):]
+        xx
+    xx
+    head | p["head"]
+    nav | p["nav"]
+    flash | flash_html(c)
+    main | p["main"]
+    footer | p["footer"]
+    sidebar | p["sidebar"]
+    lb | lightbox()
+    logo | html::img_src(html::asset("campfire-icon.png"), "alt=\"Campfire logo\" width=\"256\" height=\"216\" ", 0)
+    return """<!DOCTYPE html>
+<html>
+  <head>
+    <title>{title}</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, interactive-widget=resizes-content">
+    <meta name="view-transition" content="same-origin">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="csrf-param" content="authenticity_token" />
+<meta name="csrf-token" content="{csrf}" />
+    
+    {user_meta}
+    <meta name="action-cable-url" content="/cable">
+
+    <meta name="vapid-public-key">
+    <meta name="turbo-prefetch" content="true">
+
+    <link rel="manifest" href="/webmanifest.json">
+    <link rel="icon" href="/account/logo?v={v}" type="image/png">
+    <link rel="apple-touch-icon" href="/account/logo?v={v}">
+
+    {assets}
+
+    {head}
+  </head>
+
+  <body class="{body_class}" data-controller="local-time lightbox">
+    <a href="#main-content" class="skip-navigation btn">Skip to main content</a>
+
+    <nav id="nav">
+      {nav}
+    </nav>
+
+{flash}
+    <main id="main-content">
+      {main}
+
+      <footer id="footer">
+        {footer}
+      </footer>
+    </main>
+
+    <aside id="sidebar" data-controller="toggle-class" data-toggle-class-toggle-class="open">
+      {sidebar}
+    </aside>
+
+    {lb}
+
+    <a href="https://once.com" id="app-logo" target="_blank" aria-label="Once software from 37signals home page">
+      {logo}
+    </a>
+  </body>
+</html>
+"""
+xx

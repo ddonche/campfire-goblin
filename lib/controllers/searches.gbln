@@ -1,0 +1,11 @@
+/// lib/controllers/searches.gbln -- SearchesController
+import lib/http as http
+act index(c)
+    return http::text(501, "Not Implemented")
+xx
+act create(c)
+    return http::text(501, "Not Implemented")
+xx
+act clear(c)
+    return http::text(501, "Not Implemented")
+xx

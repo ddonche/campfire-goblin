@@ -1,0 +1,75 @@
+/// lib/views/sessions.gbln -- sessions/new and accounts/_help_contact
+
+import lib/html as html
+import lib/db as db
+
+APP_VERSION | "0"
+
+act help_contact(c)
+    owner | db::one("select name, email_address from users where role = 1 order by id", [])
+    if owner == nil => return ""
+    mailto | html::h("mailto:\"" + owner["name"] + "\" <" + owner["email_address"] + ">")
+    title | html::h("Email " + owner["name"])
+    email | html::h(owner["email_address"])
+    lifebuoy | html::img("lifebuoy.svg", "aria-hidden=\"true\" ", 0)
+    return """  <div class="txt-align-center margin-block-double full-width">
+    <a class="btn center" title="{title}" href="{mailto}">
+      {lifebuoy}
+      <span>{email}</span>
+</a>
+    <div class="txt-align-center center margin-block txt-subtle">Campfire&trade; version <span class="version-badge">{APP_VERSION}</span></div>
+  </div>
+"""
+xx
+
+act new_main(c, email_value)
+    account | c["account"]
+    shake | ""
+    if :has(c["flash"], "alert") => shake |= "shake"
+    logo | html::account_logo_tag(account, "center margin-block-end txt-xx-large")
+    base | c["req"]["base"]
+    token | c["csrf"]
+    name | html::h(account["name"])
+    t_email | html::translation_button("email_address")
+    t_password | html::translation_button("password")
+    email_icon | html::img("email.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+    password_icon | html::img("password.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+    go | html::img("arrow-right.svg", "aria-hidden=\"true\" ", 0)
+    value | ""
+    if email_value != "" => value |= " value=\"" + html::h(email_value) + "\""
+    help | help_contact(c)
+    return """
+<section class="txt-align-center">
+  <div class="panel {shake}">
+    {logo}
+
+    <form class="flex flex-column gap" action="{base}/session" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="{token}" />
+      <fieldset class="flex flex-column gap center-block upad">
+        <legend class="txt-large txt-align-center"><strong>{name}</strong></legend>
+
+        <div class="flex align-center gap">
+          {t_email}
+          <label class="flex align-center gap input input--actor txt-large">
+            <input required="required" class="input" autofocus="autofocus" autocomplete="username" placeholder="Enter your email address"{value} type="email" name="email_address" id="email_address" />
+            {email_icon}
+          </label>
+        </div>
+
+        <div class="flex align-center gap">
+          {t_password}
+          <label class="flex align-center gap input input--actor txt-large">
+            <input required="required" class="input" autocomplete="current-password" placeholder="Enter your password" maxlength="72" size="72" type="password" name="password" id="password" />
+            {password_icon}
+          </label>
+        </div>
+
+        <button name="log_in" type="submit" class="btn btn--reversed center txt-large">
+          {go}
+          <span class="for-screen-reader">Go</span>
+</button>      </fieldset>
+</form>  </div>
+
+  {help}
+</section>
+"""
+xx

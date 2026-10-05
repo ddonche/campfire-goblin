@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# bin/compare ORACLE_FILE METHOD URI [cookie] [body] -- diff our page against the oracle's
+oracle=$1; shift
+out=$(mktemp); raw=$(mktemp)
+bin/request "$@" > "$raw" 2>&1
+if ! python3 -c 'import json,sys; sys.stdout.write(json.loads(open(sys.argv[1]).read().split("\ngoblin run")[0])["body"])' "$raw" > "$out" 2>/dev/null; then
+  head -c 3000 "$raw"; exit 1
+fi
+norm() { sed -E -e 's/(csrf-token" content=|authenticity_token" value=)"[^"]+"/\1"X"/g' -e '/goblin_cable-/d' -e 's/\?v=[0-9]+/?v=N/g' "$1"; }
+diff <(norm "$oracle") <(norm "$out") && echo IDENTICAL

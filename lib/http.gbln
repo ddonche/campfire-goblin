@@ -1,0 +1,381 @@
+/// lib/http.gbln
+/// Request parsing and response building for the Campfire port.
+///
+/// goblin-host runs one script per request and hands it the request through
+/// environment variables. nginx sends every dynamic request to /api/app and
+/// passes the browser's original request line in X-Request-URI, so the real
+/// path and query string come from that header.
+
+HEXV | {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "a": 10, "b": 11, "c": 12, "d": 13, "e": 14, "f": 15, "A": 10, "B": 11, "C": 12, "D": 13, "E": 14, "F": 15}
+HEXD | ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+HEXU | ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"]
+
+/// ---------- encoding helpers ----------
+
+/// Goblin's % and // always produce floats, and arrays only take int
+/// indexes, so integer arithmetic goes through these.
+act idiv(a, b)
+    return :int(:floor(a / b))
+xx
+
+act imod(a, b)
+    return :int(a - :floor(a / b) * b)
+xx
+
+act hexval(c)
+    if :has(HEXV, c) => return HEXV[c]
+    return -1
+xx
+
+act hex4(n)
+    d1 | imod(idiv(n, 4096), 16)
+    d2 | imod(idiv(n, 256), 16)
+    d3 | imod(idiv(n, 16), 16)
+    d4 | imod(n, 16)
+    return HEXD[d1] + HEXD[d2] + HEXD[d3] + HEXD[d4]
+xx
+
+/// Goblin has no chr(); JSON's \u escape turns a code point into a string.
+act cp_to_s(cp)
+    if cp >= 65536
+        v | cp - 65536
+        hi | 55296 + idiv(v, 1024)
+        lo | 56320 + imod(v, 1024)
+        return :json_parse("\"\\u" + hex4(hi) + "\\u" + hex4(lo) + "\"")
+    xx
+    return :json_parse("\"\\u" + hex4(cp) + "\"")
+xx
+
+/// Percent-decoding with UTF-8 reassembly ("+" means space, as in forms).
+act url_decode(s)
+    t | s
+    if :has(t, "+") => :update_where!(t, "+", " ")
+    if :has(t, "%") == false => return t
+    parts | :split(t, "%")
+    out | parts[0]
+    need | 0
+    cp | 0
+    n | :len(parts)
+    i | 1
+    while i < n
+        p | parts[i]
+        h1 | -1
+        h2 | -1
+        if :len(p) >= 2
+            h1 |= hexval(p[0:1])
+            h2 |= hexval(p[1:2])
+        xx
+        if h1 >= 0 and h2 >= 0
+            b | h1 * 16 + h2
+            if need > 0 and b >= 128 and b < 192
+                cp |= cp * 64 + (b - 128)
+                need |= need - 1
+                if need == 0 => out |= out + cp_to_s(cp)
+            else
+                if need > 0
+                    out |= out + "�"
+                    need |= 0
+                xx
+                if b < 128
+                    out |= out + cp_to_s(b)
+                elif b >= 240
+                    cp |= b - 240
+                    need |= 3
+                elif b >= 224
+                    cp |= b - 224
+                    need |= 2
+                elif b >= 192
+                    cp |= b - 192
+                    need |= 1
+                else
+                    out |= out + "�"
+                xx
+            xx
+            out |= out + p[2:]
+        else
+            out |= out + "%" + p
+        xx
+        i |= i + 1
+    xx
+    return out
+xx
+
+/// Percent-encoding of everything outside RFC 3986's unreserved set.
+act url_encode(s)
+    if :is_matching(s, "^[A-Za-z0-9_.~-]*$") => return s
+    out | ""
+    for ch in :chars(s)
+        c | :str(ch)
+        if :is_matching(c, "^[A-Za-z0-9_.~-]$")
+            out |= out + c
+        else
+            cp | :ord(c)
+            if cp < 128
+                out |= out + pct(cp)
+            elif cp < 2048
+                out |= out + pct(192 + idiv(cp, 64)) + pct(128 + imod(cp, 64))
+            elif cp < 65536
+                out |= out + pct(224 + idiv(cp, 4096)) + pct(128 + imod(idiv(cp, 64), 64)) + pct(128 + imod(cp, 64))
+            else
+                out |= out + pct(240 + idiv(cp, 262144)) + pct(128 + imod(idiv(cp, 4096), 64)) + pct(128 + imod(idiv(cp, 64), 64)) + pct(128 + imod(cp, 64))
+            xx
+        xx
+    xx
+    return out
+xx
+
+act pct(b)
+    hi | idiv(b, 16)
+    lo | imod(b, 16)
+    return "%" + HEXU[hi] + HEXU[lo]
+xx
+
+/// Rails' to_query for a single value.
+act query_pair(k, v)
+    return url_encode(k) + "=" + url_encode(v)
+xx
+
+/// ---------- request ----------
+
+/// Parses "a=1&b[]=2&b[]=3" into {"a": "1", "b[]": ["2", "3"]}.
+act parse_query(q)
+    params | {}
+    if q == "" => return params
+    for pair in :split(q, "&")
+        if pair != ""
+            k | pair
+            v | ""
+            idx | :find(pair, "=")
+            if idx != nil
+                k |= pair[0:idx]
+                v |= pair[idx + 1:]
+            xx
+            k |= url_decode(k)
+            v |= url_decode(v)
+            if :ends_with(k, "[]")
+                if :has(params, k)
+                    list | params[k]
+                    :put_last!(list, v)
+                    :update!(params[k], list)
+                else
+                    :update!(params[k], [v])
+                xx
+            else
+                :update!(params[k], v)
+            xx
+        xx
+    xx
+    return params
+xx
+
+act parse_cookies(header)
+    jar | {}
+    if header == "" => return jar
+    for part in :split(header, ";")
+        kv | :trim(part)
+        idx | :find(kv, "=")
+        if idx != nil
+            :update!(jar[kv[0:idx]], url_decode(kv[idx + 1:]))
+        xx
+    xx
+    return jar
+xx
+
+act header(name)
+    v | :req_header(name)
+    if v == nil => return ""
+    return v
+xx
+
+act read_body()
+    file | :env("GOBLIN_REQUEST_FILE")
+    if file != nil and file != ""
+        body | :read_text(file)
+        :delete_path!(file)
+        return body
+    xx
+    b | :req_body()
+    if b == nil => return ""
+    return b
+xx
+
+/// Builds the request map every handler receives.
+act request()
+    uri | header("x-request-uri")
+    if uri == ""
+        uri |= :req_path()
+        q0 | :req_query()
+        if q0 != nil and q0 != "" => uri |= uri + "?" + q0
+    xx
+    path | uri
+    query | ""
+    qi | :find(uri, "?")
+    if qi != nil
+        path |= uri[0:qi]
+        query |= uri[qi + 1:]
+    xx
+    method | :upper(:req_method())
+    params | parse_query(query)
+    body | ""
+    ctype | header("content-type")
+    if method != "GET" and method != "HEAD"
+        body |= read_body()
+        if :starts_with(ctype, "application/x-www-form-urlencoded")
+            form | parse_query(body)
+            for k in :keys(form)
+                :update!(params[k], form[k])
+            xx
+        elif :starts_with(ctype, "application/json") and body != ""
+            js | :json_parse(body)
+            if :is_map(js)
+                for k in :keys(js)
+                    :update!(params[k], js[k])
+                xx
+            xx
+        xx
+        /// Rails' method override for forms (button_to ... method: :delete)
+        if method == "POST" and :has(params, "_method")
+            method |= :upper(params["_method"])
+        xx
+    xx
+    host | header("x-forwarded-host")
+    if host == "" => host |= header("host")
+    proto | header("x-forwarded-proto")
+    if proto == "" => proto |= "http"
+    ip | header("x-real-ip")
+    if ip == "" => ip |= "127.0.0.1"
+    return {
+        "method": method,
+        "path": path,
+        "query": query,
+        "params": params,
+        "body": body,
+        "content_type": ctype,
+        "cookies": parse_cookies(header("cookie")),
+        "accept": header("accept"),
+        "user_agent": header("user-agent"),
+        "host": host,
+        "base": proto + "://" + host,
+        "ip": ip,
+        "turbo_frame": header("turbo-frame"),
+        "xhr": header("x-requested-with") == "XMLHttpRequest"
+    }
+xx
+
+act param(req, name)
+    p | req["params"]
+    if :has(p, name)
+        v | p[name]
+        if v == nil => return ""
+        return v
+    xx
+    return ""
+xx
+
+act has_param(req, name)
+    return :has(req["params"], name)
+xx
+
+act cookie_of(req, name)
+    jar | req["cookies"]
+    if :has(jar, name) => return jar[name]
+    return ""
+xx
+
+/// True when the client asked for a Turbo Stream response.
+act wants_turbo_stream(req)
+    return :has(req["accept"], "text/vnd.turbo-stream.html")
+xx
+
+/// ---------- response ----------
+
+act response(status, body)
+    return {"status": status, "body": body, "headers": {"Content-Type": "text/html; charset=utf-8"}, "cookies": []}
+xx
+
+act html(body)
+    return response(200, body)
+xx
+
+act turbo_stream(body)
+    res | response(200, body)
+    :update!(res["headers"]["Content-Type"], "text/vnd.turbo-stream.html; charset=utf-8")
+    return res
+xx
+
+act json(status, value)
+    res | response(status, :json_stringify(value))
+    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    return res
+xx
+
+act text(status, body)
+    res | response(status, body)
+    :update!(res["headers"]["Content-Type"], "text/plain; charset=utf-8")
+    return res
+xx
+
+act head(status)
+    return text(status, "")
+xx
+
+/// Rails' redirect_to: 302 to an absolute URL (303 after non-GET from Turbo).
+act redirect(req, location)
+    url | location
+    if :starts_with(url, "/") => url |= req["base"] + url
+    status | 302
+    res | response(status, "")
+    :update!(res["headers"]["Location"], url)
+    return res
+xx
+
+act see_other(req, location)
+    res | redirect(req, location)
+    :update!(res["status"], 303)
+    return res
+xx
+
+act add_header(res, name, value)
+    :update!(res["headers"][name], value)
+    return res
+xx
+
+/// Cookie attributes Goblin's set_cookie() has no option for (SameSite,
+/// Expires) ride along in the value, which goblin-host writes verbatim.
+act add_cookie(res, name, value, attrs)
+    list | res["cookies"]
+    :put_last!(list, name + "=" + value + attrs)
+    :update!(res["cookies"], list)
+    return res
+xx
+
+PERMANENT | "; path=/; expires=Fri, 05 Oct 2046 00:00:00 GMT"
+
+act set_permanent_cookie(res, name, value, httponly)
+    attrs | PERMANENT
+    if httponly => attrs |= attrs + "; httponly"
+    return add_cookie(res, name, url_encode(value), attrs + "; samesite=lax")
+xx
+
+act delete_cookie(res, name)
+    return add_cookie(res, name, "", "; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
+xx
+
+/// Writes the response through the host's envelope and returns the body,
+/// which the router emits as its final expression.
+act emit(res)
+    :set_status(res["status"])
+    hs | res["headers"]
+    for k in :keys(hs)
+        :set_header(k, hs[k])
+    xx
+    for c in res["cookies"]
+        /// set_cookie(name, value) appends "name=value"; split ours back out.
+        idx | :find(c, "=")
+        :set_cookie(c[0:idx], c[idx + 1:])
+    xx
+    /// The CLI prints no envelope at all for an empty body, which would drop
+    /// the status and headers too, so an empty body goes out as one space.
+    if res["body"] == "" => return " "
+    return res["body"]
+xx

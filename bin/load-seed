@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Loads a Campfire SQLite database (a benchmark seed's db/) into Postgres.
+
+    bin/load-seed SEED_DIR [DATABASE_URL]
+
+Recreates the schema from db/schema.sql, copies every table Campfire's
+schema.rb defines, then copies the FTS5 search index rows. Goblin has no
+SQLite driver, which is why the port runs on Postgres; this keeps seeds
+interchangeable with the Rails app's.
+"""
+import csv, io, os, sqlite3, subprocess, sys
+
+seed = sys.argv[1]
+url = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("DATABASE_URL", "postgres://postgres@127.0.0.1:5433/campfire")
+root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+dbdir = os.path.join(seed, "db")
+candidates = [f for f in os.listdir(dbdir) if f.endswith(".sqlite3") and "test" not in f]
+src = sqlite3.connect(os.path.join(dbdir, sorted(candidates)[0]))
+
+def psql(sql=None, file=None, data=None):
+    cmd = ["psql", url, "-v", "ON_ERROR_STOP=1", "-q", "-o", "/dev/null"]
+    cmd += ["-f", file] if file else ["-c", sql]
+    subprocess.run(cmd, input=data, check=True, text=True)
+
+psql("SET client_min_messages = warning; DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+psql(file=os.path.join(root, "db/schema.sql"))
+secret = os.environ.get("SECRET_KEY_BASE", "isolated-benchmark-fixture-key")
+dbname = url.rsplit("/", 1)[1].split("?")[0]
+# Rails' key generator: PBKDF2-SHA256, 1000 iterations, 64-byte keys per salt.
+import hashlib
+for purpose, salt in [("signed_id", "active_record/signed_id"), ("sgid", "signed_global_ids"),
+                      ("turbo", "turbo/signed_stream_verifier_key")]:
+    key = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt.encode(), 1000, 64).hex()
+    psql(f"ALTER DATABASE \"{dbname}\" SET app.key_{purpose} = '{key}'")
+
+tables = ["accounts", "users", "rooms", "messages", "action_text_rich_texts", "active_storage_blobs",
+          "active_storage_attachments", "active_storage_variant_records", "bans", "boosts", "memberships",
+          "push_subscriptions", "searches", "sessions", "webhooks"]
+for table in tables:
+    cur = src.execute(f"select * from {table}")
+    cols = [c[0] for c in cur.description]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    n = 0
+    for row in cur:
+        w.writerow(["\\N" if v is None else v for v in row])
+        n += 1
+    psql(f"\\copy {table} ({', '.join(cols)}) from stdin with (format csv, null '\\N')", data=buf.getvalue())
+    psql(f"select setval(pg_get_serial_sequence('{table}', 'id'), coalesce((select max(id) from {table}), 0) + 1, false)")
+    print(f"{table}: {n}")
+
+buf = io.StringIO()
+w = csv.writer(buf)
+for rowid, body in src.execute("select rowid, body from message_search_index"):
+    w.writerow([rowid, body or ""])
+psql("\\copy message_search_index (rowid, body) from stdin with (format csv)", data=buf.getvalue())
+psql("analyze")

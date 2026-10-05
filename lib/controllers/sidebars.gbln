@@ -1,0 +1,5 @@
+/// lib/controllers/sidebars.gbln -- Users::SidebarsController
+import lib/http as http
+act show(c)
+    return http::text(501, "Not Implemented")
+xx

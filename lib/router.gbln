@@ -1,0 +1,104 @@
+/// lib/router.gbln
+/// config/routes.rb and ApplicationController's before_actions.
+
+import lib/http as http
+import lib/auth as auth
+import lib/db as db
+import lib/html as html
+import lib/platform as platform
+import lib/controllers/sessions as sessions
+import lib/controllers/rooms as rooms
+import lib/controllers/messages as messages
+import lib/controllers/sidebars as sidebars
+import lib/controllers/searches as searches
+
+
+act not_found(c)
+    return http::text(404, "Not Found")
+xx
+
+act forbidden()
+    return http::head(403)
+xx
+
+/// Splits "/rooms/1/messages" into ["rooms", "1", "messages"], dropping a
+/// trailing ".json" / ".html" format into the second slot of the result.
+act segments(path)
+    out | []
+    for s in :split(path, "/")
+        if s != "" => :put_last!(out, http::url_decode(s))
+    xx
+    return out
+xx
+
+act strip_format(s)
+    if :ends_with(s, ".json") or :ends_with(s, ".html") => return html::chop(s, 5)
+    return s
+xx
+
+/// require_authentication's fallback: remember where to come back to.
+act request_authentication(c)
+    req | c["req"]
+    res | http::redirect(req, "/session/new")
+    url | req["base"] + req["path"]
+    if req["query"] != "" => url |= url + "?" + req["query"]
+    res |= http::add_cookie(res, "return_to", http::url_encode(url), "; path=/; httponly; samesite=lax")
+    return res
+xx
+
+act dispatch(c)
+    req | c["req"]
+    m | req["method"]
+    s | segments(req["path"])
+    n | :len(s)
+
+    /// Rails::HealthController -- outside ApplicationController.
+    if n == 1 and s[0] == "up"
+        return http::html("<!DOCTYPE html><html><body style=\"background-color: green\"></body></html>")
+    xx
+
+    p | platform::parse(req["user_agent"])
+    if platform::allowed(p) == false => return http::text(406, "Your browser is not supported. Please upgrade.")
+
+    if m != "GET" and m != "HEAD"
+        if auth::verified_request(c) == false => return http::text(422, "The change you wanted was rejected.")
+        banned | db::value("select count(*)::int as n from bans where ip_address = $1", [req["ip"]])
+        if banned > 0 => return http::head(429)
+    xx
+
+    /// ---- routes that allow unauthenticated access ----
+    if n == 2 and s[0] == "session" and s[1] == "new" and m == "GET" => return sessions::new(c)
+    if n == 1 and s[0] == "session" and m == "POST" => return sessions::create(c)
+
+    /// ---- everything else requires a signed-in user ----
+    if auth::signed_in(c) == false => return request_authentication(c)
+    bot | c["authenticated_by"] == "bot_key"
+    if bot => return forbidden()
+
+    if n == 1 and s[0] == "session" and m == "DELETE" => return sessions::destroy(c)
+
+    if n == 0 => return rooms::root(c)
+
+    if s[0] == "rooms"
+        if n == 1 and m == "GET" => return rooms::index(c)
+        if n == 2 and m == "GET" => return rooms::show(c, s[1], "")
+        if n == 2 and m == "DELETE" => return rooms::destroy(c, s[1])
+        if n == 3 and m == "GET" and :starts_with(s[2], "@") => return rooms::show(c, s[1], s[2][1:])
+        if n >= 3 and s[2] == "messages"
+            room_id | s[1]
+            if n == 3 and m == "GET" => return messages::index(c, room_id)
+            if n == 3 and m == "POST" => return messages::create(c, room_id)
+        xx
+        return not_found(c)
+    xx
+
+    if n == 3 and s[0] == "users" and s[1] == "me" and s[2] == "sidebar" and m == "GET" => return sidebars::show(c)
+
+    if s[0] == "searches"
+        if n == 1 and m == "GET" => return searches::index(c)
+        if n == 1 and m == "POST" => return searches::create(c)
+        if n == 2 and s[1] == "clear" and m == "DELETE" => return searches::clear(c)
+    xx
+
+    return not_found(c)
+xx
