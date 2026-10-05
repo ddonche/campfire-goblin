@@ -226,6 +226,7 @@ act request()
     ctype | header("content-type")
     files | {}
     parts_dir | ""
+    body_file | ""
     if method != "GET" and method != "HEAD" and :starts_with(:lower(ctype), "multipart/form-data")
         file | :env("GOBLIN_REQUEST_FILE")
         if file != nil and file != ""
@@ -237,6 +238,11 @@ act request()
             parts_dir |= mp["dir"]
             :delete_path!(file)
         xx
+    elif method == "PUT" and :starts_with(path, "/rails/active_storage/disk/")
+        /// a direct upload's bytes: left in the host's file, which Goblin
+        /// could not read as text
+        f | :env("GOBLIN_REQUEST_FILE")
+        if f != nil => body_file |= f
     elif method != "GET" and method != "HEAD"
         body |= read_body()
         if :starts_with(ctype, "application/x-www-form-urlencoded")
@@ -268,6 +274,7 @@ act request()
         "params": params,
         "files": files,
         "parts_dir": parts_dir,
+        "body_file": body_file,
         "body": body,
         "content_type": ctype,
         "cookies": parse_cookies(header("cookie")),

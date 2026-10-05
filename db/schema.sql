@@ -227,9 +227,13 @@ CREATE FUNCTION campfire_digest(data text, purpose text) RETURNS text LANGUAGE s
     CASE WHEN purpose IN ('sgid', 'active_storage') THEN 'sha1' ELSE 'sha256' END), 'hex')
 $$;
 
+-- Signed global ids use the URL-safe alphabet but keep their padding;
+-- other URL-safe messages drop it.
 CREATE FUNCTION campfire_sign(data text, purpose text) RETURNS text LANGUAGE sql STABLE AS $$
   SELECT b64 || '--' || campfire_digest(b64, purpose)
-  FROM (SELECT campfire_b64(data, purpose NOT IN ('turbo', 'active_storage')) AS b64) s
+  FROM (SELECT CASE WHEN purpose = 'sgid'
+    THEN translate(encode(convert_to(data, 'UTF8'), 'base64'), E'+/\n', '-_')
+    ELSE campfire_b64(data, purpose NOT IN ('turbo', 'active_storage')) END AS b64) s
 $$;
 
 CREATE FUNCTION campfire_verify(signed text, purpose text) RETURNS text LANGUAGE sql STABLE AS $$
@@ -333,6 +337,26 @@ $$;
 CREATE FUNCTION campfire_disk_key(data_json text) RETURNS text LANGUAGE sql STABLE AS $$
   SELECT campfire_sign('{"_rails":{"data":' || data_json || ',"exp":"' ||
     to_char(utc_now() + interval '5 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') || '","pur":"blob_key"}}', 'active_storage')
+$$;
+
+-- DirectUploadsController#direct_upload_json: the blob's attributes, its
+-- attachable sgid and signed id, and where to PUT the bytes -- a disk URL
+-- whose token (purpose blob_token, five minutes) names the key, content
+-- type, length and checksum the upload must match.
+CREATE FUNCTION campfire_direct_upload_json(p_blob bigint, p_base text) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT row_to_json(t) FROM (
+    SELECT b.id, b.byte_size, b.checksum, b.content_type,
+      to_char(b.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS created_at, b.filename, b.key,
+      coalesce(b.metadata, '{}')::json AS metadata, b.service_name,
+      campfire_sign('{"_rails":{"data":"gid://campfire/ActiveStorage::Blob/' || b.id || '?expires_in","pur":"attachable"}}', 'sgid') AS attachable_sgid,
+      campfire_blob_signed_id(b.id) AS signed_id,
+      (SELECT row_to_json(d) FROM (
+        SELECT p_base || '/rails/active_storage/disk/' || campfire_sign('{"_rails":{"data":' ||
+            (SELECT row_to_json(k) FROM (SELECT b.key, b.content_type, b.byte_size AS content_length,
+              b.checksum, 'local' AS service_name) k)::text ||
+            ',"exp":"' || to_char(utc_now() + interval '5 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') || '","pur":"blob_token"}}', 'active_storage') AS url,
+          (SELECT row_to_json(h) FROM (SELECT b.content_type AS "Content-Type") h) AS headers) d) AS direct_upload
+    FROM active_storage_blobs b WHERE b.id = p_blob) t
 $$;
 
 -- A verified ActiveStorage message's data for a purpose, or NULL when the

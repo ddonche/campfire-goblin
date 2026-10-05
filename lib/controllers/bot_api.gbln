@@ -90,7 +90,11 @@ act create(c, room_id)
     room | find_room(c, room_id)
     if room == nil => return head_json(404)
     upload | nil
-    if :has(c["req"]["files"], "attachment") => upload |= c["req"]["files"]["attachment"]
+    if :has(c["req"]["files"], "attachment")
+        upload |= c["req"]["files"]["attachment"]
+    elif http::param(c["req"], "attachment") != ""
+        upload |= {"signed_id": http::param(c["req"], "attachment")}
+    xx
     body | raw_body(c)
     if upload != nil => body |= nil
     if upload == nil and blank(body) => return head_json(422)

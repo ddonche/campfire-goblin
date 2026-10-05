@@ -114,7 +114,11 @@ act create(c, room_id)
     body | nil
     if http::has_param(req, "message[body]") => body |= http::param(req, "message[body]")
     upload | nil
-    if :has(req["files"], "message[attachment]") => upload |= req["files"]["message[attachment]"]
+    if :has(req["files"], "message[attachment]")
+        upload |= req["files"]["message[attachment]"]
+    elif http::param(req, "message[attachment]") != ""
+        upload |= {"signed_id": http::param(req, "message[attachment]")}
+    xx
     m | post_with(c, room, body, http::param(req, "message[client_message_id]"), upload)
     webhooks::deliver_later(m)
     return http::turbo_stream(cable::stream_tag("append", "messages_" + html::room_key(room), message_views::single(stream_context(c), m)) + "\n")
@@ -139,7 +143,14 @@ act post_with(c, room, raw_body, client_id, upload)
     created | db::doc("select campfire_create_message($1, $2, $3, $4, $5)", [c["user"]["id"], room["id"], body, client_id, plain])
     m | created["message"]
     if upload != nil
-        b | storage::create_blob(upload)
+        b | nil
+        if :has(upload, "signed_id")
+            /// a signed blob id (a direct upload) rather than a file
+            b |= storage::find_signed(upload["signed_id"])
+            if b != nil => b |= storage::analyze_later(b)
+        else
+            b |= storage::create_blob(upload)
+        xx
         if b != nil
             db::exec("select campfire_attach('Message', $1, 'attachment', $2)", [m["id"], b["id"]])
             storage::process_attachment(b)

@@ -60,7 +60,8 @@ act request_authentication(c)
 xx
 
 act active_storage(c, s, n, m)
-    if m != "GET" => return nil
+    if n == 3 and s[2] == "direct_uploads" and m == "POST" => return blobs::direct_upload(c)
+    if m != "GET" or n < 4 => return nil
     if s[2] == "blobs" and s[3] == "redirect" and n >= 5 => return blobs::show(c, s[4])
     if s[2] == "representations" and s[3] == "redirect" and n >= 6 => return blobs::representation(c, s[4], s[5])
     if s[2] == "blobs" and s[3] == "proxy" and n >= 5 => return blobs::proxy(c, s[4])
@@ -90,6 +91,15 @@ act dispatch(c)
     p | platform::parse(req["user_agent"])
     if platform::allowed(p) == false => return http::text(406, "Your browser is not supported. Please upgrade.")
 
+    /// DiskController skips forgery protection: a direct upload's PUT
+    if n >= 4 and s[0] == "rails" and s[1] == "active_storage" and s[2] == "disk" and m == "PUT"
+        res | blobs::disk_update(c, s[3])
+        ctx | c
+        :update!(ctx["new_csrf"], false)
+        :update!(res["context"], ctx)
+        return res
+    xx
+
     if m != "GET" and m != "HEAD"
         if auth::verified_request(c) == false => return http::error_page(422)
         banned | db::value("select count(*)::int as n from bans where ip_address = $1", [req["ip"]])
@@ -111,7 +121,7 @@ act dispatch(c)
     if n == 1 and (s[0] == "service-worker" or s[0] == "service-worker.js") and m == "GET" => return pwa_ctl::service_worker(c)
 
     /// ActiveStorage's engine routes, mounted outside ApplicationController
-    if n >= 4 and s[0] == "rails" and s[1] == "active_storage"
+    if n >= 3 and s[0] == "rails" and s[1] == "active_storage"
         res | active_storage(c, s, n, m)
         if res != nil
             /// no session or CSRF cookie: ActiveStorage::BaseController

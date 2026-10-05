@@ -8,6 +8,8 @@
 import lib/http as http
 import lib/db as db
 import lib/storage as storage
+import lib/webhooks as webhooks
+import lib/multipart as multipart
 
 /// Blob.find_signed!(id, purpose: :blob_id)
 act find_blob(signed_id)
@@ -119,4 +121,70 @@ act representation_proxy(c, signed_id, variation_key)
     rep | storage::representation(b, v)
     if rep == nil => return http::head(404)
     return stream(c, rep)
+xx
+
+/// POST /rails/active_storage/direct_uploads -- DirectUploadsController#create
+act direct_upload(c)
+    if session_user(c) == false => return http::head(401)
+    req | c["req"]
+    p | req["params"]
+    spec | {}
+    if :has(p, "blob") and :is_map(p["blob"])
+        spec |= p["blob"]
+    else
+        for k in ["filename", "byte_size", "checksum", "content_type"]
+            if :has(p, "blob[" + k + "]") => :update!(spec[k], p["blob[" + k + "]"])
+        xx
+    xx
+    /// params.expect(blob: [...]): ActionController::ParameterMissing
+    if :len(:keys(spec)) == 0
+        res | http::response(400, "")
+        :update!(res["headers"]["Content-Type"], "text/html; charset=UTF-8")
+        return res
+    xx
+    metadata | "\{}"
+    if :has(spec, "metadata") and :is_map(spec["metadata"]) => metadata |= :json_stringify(spec["metadata"])
+    size | nil
+    if :has(spec, "byte_size") and spec["byte_size"] != nil => size |= :int(:str(spec["byte_size"]))
+    b | storage::create_before_direct_upload(field(spec, "filename"), size, field(spec, "checksum"), field(spec, "content_type"), metadata)
+    res | http::response(200, db::value("select campfire_direct_upload_json($1, $2)::text as v", [b["id"], req["base"]]))
+    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    return res
+xx
+
+/// ActiveStorageAuthentication: Campfire requires a signed-in session for
+/// the direct-upload endpoints, which Active Storage itself leaves open.
+act session_user(c)
+    return c["user"] != nil and c["authenticated_by"] == "session"
+xx
+
+act field(m, k)
+    if :has(m, k) == false or m[k] == nil => return nil
+    return :str(m[k])
+xx
+
+/// PUT /rails/active_storage/disk/:encoded_token -- DiskController#update:
+/// the bytes of a direct upload, which must match the token's content
+/// type, length and checksum.
+act disk_update(c, encoded_token)
+    if session_user(c) == false => return http::head(401)
+    raw | db::value("select campfire_as_verified($1, 'blob_token') as v", [encoded_token])
+    if raw == nil => return http::head(404)
+    token | :json_parse(raw)
+    declared | webhooks::response_content_type(c["req"]["content_type"])
+    if declared != nil => declared |= webhooks::mime_lookup(declared)[1]
+    length | http::header("content-length")
+    if declared != token["content_type"] or length != :str(token["content_length"]) => return http::head(422)
+    body_file | c["req"]["body_file"]
+    if body_file == "" or :file_exists(body_file) == false => return http::head(422)
+    dest | storage::file_path(token["key"])
+    out | storage::tmp_out()
+    if multipart::storage_cmd(["ingest", body_file, dest, out]) == false => return http::head(422)
+    f | storage::read_fields(out)
+    /// ActiveStorage::IntegrityError
+    if :len(f) < 2 or f[1] != token["checksum"]
+        :delete_path!(dest)
+        return http::head(422)
+    xx
+    return http::head(204)
 xx

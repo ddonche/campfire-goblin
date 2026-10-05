@@ -360,3 +360,35 @@ act disk_url(req, b, requested)
     encoded | db::value("select campfire_disk_key($1) as v", [data])
     return req["base"] + "/rails/active_storage/disk/" + encoded + "/" + path_escape(b["filename"])
 xx
+
+/// ---------- direct uploads ----------
+
+/// ActiveStorage::Blob.create_before_direct_upload!: the record, before
+/// its bytes arrive. Returns the blob.
+act create_before_direct_upload(filename, byte_size, checksum, content_type, metadata_json)
+    id | insert_blob(new_key(), filename, content_type, metadata_json, byte_size, checksum)
+    return by_id(id)
+xx
+
+/// ActiveStorage::Blob.find_signed(id): a blob by its signed id, or nil
+act find_signed(signed_id)
+    id | db::value("select campfire_as_verified($1, 'blob_id') as v", [signed_id])
+    if id == nil or :is_matching(id, "^[0-9]+$") == false => return nil
+    return by_id(:int(id))
+xx
+
+/// Attaching a blob that was uploaded directly: it is identified, and
+/// AnalyzeJob merges the analyzer's metadata into what the client sent.
+act analyze_later(b)
+    if :has(b["metadata"], "\"analyzed\":true") => return b
+    if :file_exists(file_path(b["key"])) == false => return b
+    found | analyze(file_path(b["key"]), b["content_type"])
+    existing | :trim(b["metadata"])
+    merged | found
+    if existing != "" and existing != "\{}" and :starts_with(existing, "\{")
+        n | :len(existing)
+        merged |= existing[0:n - 1] + "," + found[1:]
+    xx
+    db::exec("update active_storage_blobs set metadata = $2 where id = $1", [b["id"], merged])
+    return by_id(b["id"])
+xx
