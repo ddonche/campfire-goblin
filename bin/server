@@ -8,6 +8,9 @@ PORT=${PORT:-3002}
 GOBLIN_PORT=${GOBLIN_PORT:-3102}
 export DATABASE_URL=${DATABASE_URL:-postgres://postgres@127.0.0.1:5433/campfire}
 export GOBLIN_DOCROOT="$ROOT/app"
+# bin/storage and storage/ are found from here (lib/storage.gbln, lib/multipart.gbln)
+export CAMPFIRE_ROOT="$ROOT"
+mkdir -p "$ROOT/storage"
 
 mkdir -p tmp/log tmp/nginx
 sed -e "s|@ROOT@|$ROOT|g" -e "s|@PORT@|$PORT|g" -e "s|@GOBLIN_PORT@|$GOBLIN_PORT|g" config/nginx.conf > tmp/nginx.conf

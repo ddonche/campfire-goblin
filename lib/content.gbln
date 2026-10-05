@@ -13,6 +13,7 @@
 /// it is not a general HTML5 parser.
 
 import lib/html as html
+import lib/storage as storage
 import lib/sounds as sounds
 
 /// SanitizeTags::ALLOWED_TAGS (elements outside it are removed with their content)
@@ -610,21 +611,57 @@ xx
 
 /// Messages::AttachmentPresentation
 act attachment(c, m, att)
-    path | html::h(att["path"])
-    name | html::h(att["filename"])
-    ctype | att["content_type"]
-    if att["previewable"] and (:starts_with(ctype, "image/") or :starts_with(ctype, "video/"))
-        w | att["width"]
-        ht | att["height"]
-        dims | ""
-        if w != nil and ht != nil => dims |= " width=\"" + :str(w) + "\" height=\"" + :str(ht) + "\""
-        if :starts_with(ctype, "video/")
-            return "<div class=\"attachment\"><video src=\"{path}\" controls=\"controls\" preload=\"none\" class=\"message__attachment\"{dims}></video></div>"
+    b | att
+    blob_url | storage::blob_path(b, "")
+    download_url | storage::blob_path(b, "attachment")
+    name | html::h(b["filename"])
+    if storage::previewable(b) or storage::variable(b)
+        dims | preview_dimensions(b)
+        if :starts_with(b["content_type"], "video/")
+            poster | html::h(storage::representation_path(b, storage::poster_variation()))
+            inner | "<video src=\"" + html::h(blob_url) + "\" poster=\"{poster}\" controls=\"controls\" preload=\"none\" width=\"100%\" height=\"100%\" class=\"message__attachment\"></video>"
+            return dimension_constraints(dims, inner)
         xx
-        return "<div class=\"attachment\"><a href=\"{path}\" data-action=\"lightbox#open:prevent\" data-lightbox-target=\"image\" data-lightbox-url-value=\"{path}?disposition=attachment\"><img src=\"{path}\" class=\"message__attachment\"{dims} alt=\"{name}\" /></a></div>"
+        thumb | html::h(storage::representation_path(b, storage::thumb_variation(b)))
+        size | ""
+        if dims != nil => size |= " width=\"" + storage::ruby_float(dims[0]) + "\" height=\"" + storage::ruby_float(dims[1]) + "\""
+        dl | html::h(download_url)
+        img | "<img{size} class=\"message__attachment\" loading=\"lazy\" src=\"{thumb}\" />"
+        link | "<a class=\"flex\" data-lightbox-target=\"image\" data-action=\"lightbox#open\" data-lightbox-url-value=\"{dl}\" href=\"" + html::h(blob_url) + "\">{img}</a>"
+        return dimension_constraints(dims, link)
     xx
-    icon | html::img("common-file-text.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
-    return "<div class=\"attachment\"><a class=\"btn btn--plain\" href=\"{path}?disposition=attachment\">{icon}<span>{name}</span></a></div>"
+    icon | html::img("common-file-text.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 22)
+    download | html::img("download.svg", "aria-hidden=\"true\" ", 20)
+    share | html::img("share.svg", "aria-hidden=\"true\" ", 20)
+    dl | html::h(download_url)
+    return "<div class=\"flex-inline align-center gap-half\">{icon}<span>{name}</span><a class=\"btn message__action-btn hide-in-ios-pwa\" style=\"--width: auto;\" href=\"{dl}\">{download}<span class=\"for-screen-reader\">Download {name}</span></a><button class=\"btn message__action-btn\" style=\"--width: auto;\" data-controller=\"web-share\" data-action=\"web-share#share\" data-web-share-files-value=\"{dl}\">{share}<span class=\"for-screen-reader\">Share {name}</span></button></div>"
+xx
+
+/// inline_media_dimension_constraints
+act dimension_constraints(dims, inner)
+    if dims == nil => return "<div class=\"max-inline-size center overflow-clip\">" + inner + "</div>"
+    half | storage::ruby_float(dims[0] / 2)
+    ratio | storage::ruby_float(dims[0] / dims[1])
+    return "<div class=\"max-inline-size center flex overflow-clip\" style=\"width: {half}px; aspect-ratio: {ratio};\">" + inner + "</div>"
+xx
+
+/// Messages::AttachmentPresentation#preview_dimensions: the stored size,
+/// scaled into the thumbnail's limit.
+act preview_dimensions(b)
+    dims | storage::dimensions(b)
+    if dims == nil => return nil
+    w | dims[0][0]
+    h | dims[1][0]
+    limit_w | storage::thumb_width()
+    limit_h | storage::thumb_height()
+    if w <= limit_w and h <= limit_h
+        /// Integers stay integers, as the metadata holds them
+        if dims[0][1] or dims[1][1] => return [w * 1.0, h * 1.0]
+        return [:int(w), :int(h)]
+    xx
+    scale | limit_w / w
+    if limit_h / h < scale => scale |= limit_h / h
+    return [w * scale, h * scale]
 xx
 
 /// ---------- storing ----------

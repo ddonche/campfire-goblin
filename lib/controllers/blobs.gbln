@@ -1,0 +1,53 @@
+/// lib/controllers/blobs.gbln
+/// ActiveStorage::Blobs::RedirectController,
+/// ActiveStorage::Representations::RedirectController and
+/// ActiveStorage::DiskController#show: the three routes an attachment's URL
+/// goes through. The first two redirect to a five-minute signed disk URL;
+/// the third serves the file (through nginx).
+
+import lib/http as http
+import lib/db as db
+import lib/storage as storage
+
+/// Blob.find_signed!(id, purpose: :blob_id)
+act find_blob(signed_id)
+    id | db::value("select campfire_as_verified($1, 'blob_id') as v", [signed_id])
+    if id == nil or :is_matching(id, "^[0-9]+$") == false => return nil
+    return storage::by_id(:int(id))
+xx
+
+act expires(res)
+    :update!(res["headers"]["Cache-Control"], "max-age=300, private")
+    return res
+xx
+
+/// GET /rails/active_storage/blobs/redirect/:signed_id/*filename
+act show(c, signed_id)
+    b | find_blob(signed_id)
+    if b == nil => return http::head(404)
+    url | storage::disk_url(c["req"], b, http::param(c["req"], "disposition"))
+    return expires(http::redirect(c["req"], url))
+xx
+
+/// GET /rails/active_storage/representations/redirect/:signed_id/:variation_key/*filename
+act representation(c, signed_id, variation_key)
+    b | find_blob(signed_id)
+    if b == nil => return http::head(404)
+    v | storage::decode_variation(variation_key)
+    if v == nil => return http::head(404)
+    rep | storage::representation(b, v)
+    if rep == nil => return http::head(404)
+    url | storage::disk_url(c["req"], rep, http::param(c["req"], "disposition"))
+    return expires(http::redirect(c["req"], url))
+xx
+
+/// GET /rails/active_storage/disk/:encoded_key/*filename
+act disk(c, encoded_key)
+    data | db::value("select campfire_as_verified($1, 'blob_key') as v", [encoded_key])
+    if data == nil => return http::head(404)
+    key | :json_parse(data)
+    if :is_map(key) == false or :has(key, "key") == false => return http::head(404)
+    path | storage::file_path(key["key"])
+    if :file_exists(path) == false => return http::head(404)
+    return http::send_file_as("/_send/" + path, key["content_type"], key["disposition"], "max-age=3600, public")
+xx

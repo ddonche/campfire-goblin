@@ -10,6 +10,8 @@ HEXV | {"0": 0, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, 
 HEXD | ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
 HEXU | ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F"]
 
+import lib/multipart as multipart
+
 /// ---------- encoding helpers ----------
 
 /// Goblin's % and // always produce floats, and arrays only take int
@@ -102,11 +104,15 @@ xx
 
 /// Percent-encoding of everything outside RFC 3986's unreserved set.
 act url_encode(s)
-    if :is_matching(s, "^[A-Za-z0-9_.~-]*$") => return s
+    return encode_except(s, "^[A-Za-z0-9_.~-]$")
+xx
+
+/// Percent-encodes every character a regex does not keep, as UTF-8.
+act encode_except(s, keep)
     out | ""
     for ch in :chars(s)
         c | :str(ch)
-        if :is_matching(c, "^[A-Za-z0-9_.~-]$")
+        if :is_matching(c, keep)
             out |= out + c
         else
             cp | :ord(c)
@@ -218,7 +224,20 @@ act request()
     params | parse_query(query)
     body | ""
     ctype | header("content-type")
-    if method != "GET" and method != "HEAD"
+    files | {}
+    parts_dir | ""
+    if method != "GET" and method != "HEAD" and :starts_with(:lower(ctype), "multipart/form-data")
+        file | :env("GOBLIN_REQUEST_FILE")
+        if file != nil and file != ""
+            mp | multipart::parse(file, ctype)
+            for k in :keys(mp["params"])
+                :update!(params[k], mp["params"][k])
+            xx
+            files |= mp["files"]
+            parts_dir |= mp["dir"]
+            :delete_path!(file)
+        xx
+    elif method != "GET" and method != "HEAD"
         body |= read_body()
         if :starts_with(ctype, "application/x-www-form-urlencoded")
             form | parse_query(body)
@@ -233,11 +252,9 @@ act request()
                 xx
             xx
         xx
-        /// Rails' method override for forms (button_to ... method: :delete)
-        if method == "POST" and :has(params, "_method")
-            method |= :upper(params["_method"])
-        xx
     xx
+    /// Rails' method override for forms (button_to ... method: :delete)
+    if method == "POST" and :has(params, "_method") => method |= :upper(params["_method"])
     host | header("x-forwarded-host")
     if host == "" => host |= header("host")
     proto | header("x-forwarded-proto")
@@ -249,6 +266,8 @@ act request()
         "path": path,
         "query": query,
         "params": params,
+        "files": files,
+        "parts_dir": parts_dir,
         "body": body,
         "content_type": ctype,
         "cookies": parse_cookies(header("cookie")),
@@ -369,9 +388,14 @@ xx
 /// send_file: nginx streams the file named by X-Accel-Redirect (see
 /// config/nginx.conf) with the headers set here. `path` is under /_send/.
 act send_file(path, content_type, filename, cache_control)
+    return send_file_as(path, content_type, "inline; filename=\"" + filename + "\"; filename*=UTF-8''" + url_encode(filename), cache_control)
+xx
+
+/// send_file with the Content-Disposition header already formatted
+act send_file_as(path, content_type, disposition, cache_control)
     res | response(200, "")
     :update!(res["headers"]["Content-Type"], content_type)
-    :update!(res["headers"]["Content-Disposition"], "inline; filename=\"" + filename + "\"; filename*=UTF-8''" + url_encode(filename))
+    :update!(res["headers"]["Content-Disposition"], disposition)
     :update!(res["headers"]["Cache-Control"], cache_control)
     :update!(res["headers"]["X-Accel-Redirect"], path)
     return res

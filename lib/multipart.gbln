@@ -1,0 +1,130 @@
+/// lib/multipart.gbln
+/// multipart/form-data request bodies (file uploads).
+///
+/// goblin-host saves the raw request body to a file. Goblin reads files only
+/// as UTF-8 text, so bin/storage slices the body into its parts by byte
+/// offset; the part headers are parsed here. Text fields join the request's
+/// params; a file field becomes an upload map -- filename, declared content
+/// type and the path of its bytes -- under req["files"], with its filename
+/// in params so has_param and param work as for any other field.
+
+/// A shell-quoted argument for :run_cmd
+act shq(s)
+    t | :str(s)
+    :update_where!(t, "'", "'\\''")
+    return "'" + t + "'"
+xx
+
+/// The application root, where bin/storage lives
+act root()
+    r | :env("CAMPFIRE_ROOT")
+    if r != nil and r != "" => return r
+    return "."
+xx
+
+/// Runs a bin/storage subcommand; true when it exited cleanly.
+act storage_cmd(args)
+    quoted | []
+    for a in args
+        :put_last!(quoted, shq(a))
+    xx
+    /// run_cmd answers with a JSON document, not a map
+    r | :json_parse(:run_cmd("bash " + shq(root() + "/bin/storage") + " " + :join(quoted, " ")))
+    return r["ok"]
+xx
+
+/// The boundary parameter of a multipart Content-Type
+act boundary(ctype)
+    for piece in :split(ctype, ";")
+        p | :trim(piece)
+        if :starts_with(:lower(p), "boundary=")
+            b | p[9:]
+            n | :len(b)
+            if :starts_with(b, "\"") and :ends_with(b, "\"") and n >= 2 => b |= b[1:n - 1]
+            return b
+        xx
+    xx
+    return ""
+xx
+
+/// A quoted or bare parameter from a Content-Disposition header
+act disposition_param(header, name)
+    for piece in :split(header, ";")
+        p | :trim(piece)
+        if :starts_with(:lower(p), name + "=")
+            k | :len(name) + 1
+            v | p[k:]
+            n | :len(v)
+            if :starts_with(v, "\"") and :ends_with(v, "\"") and n >= 2
+                v |= v[1:n - 1]
+                :update_where!(v, "\\\"", "\"")
+            xx
+            return v
+        xx
+    xx
+    return nil
+xx
+
+/// Splits the body at `file` and returns {"params": {...}, "files": {...}, "dir": tmpdir}.
+act parse(file, ctype)
+    out | {"params": {}, "files": {}, "dir": ""}
+    b | boundary(ctype)
+    if b == "" => return out
+    dir | file + ".parts"
+    :update!(out["dir"], dir)
+    if storage_cmd(["split", file, b, dir]) == false => return out
+    /// Each part's index, as a list, so the walk is a for loop: declaring a
+    /// local inside a while body trips a Goblin internal error ("const table
+    /// missing entry"); see GAPS.md.
+    indexes | :split(:trim(:read_text(dir + "/count")), "\n")
+    params | {}
+    files | {}
+    for idx in indexes
+        head | :read_text(dir + "/" + idx + ".head")
+        name | ""
+        filename | ""
+        has_name | false
+        has_file | false
+        ptype | "application/octet-stream"
+        for line in :split(head, "\r\n")
+            lower | :lower(line)
+            if :starts_with(lower, "content-disposition:")
+                found | disposition_param(line, "name")
+                if found != nil
+                    name |= found
+                    has_name |= true
+                xx
+                found |= disposition_param(line, "filename")
+                if found != nil
+                    filename |= found
+                    has_file |= true
+                xx
+            elif :starts_with(lower, "content-type:")
+                ptype |= :trim(:after(line, ":"))
+            xx
+        xx
+        body_path | dir + "/" + idx + ".body"
+        if has_name
+            if has_file
+                /// Rack drops a file field submitted with no file chosen
+                if filename != ""
+                    :update!(files[name], {"filename": filename, "content_type": ptype, "path": body_path})
+                    :update!(params[name], filename)
+                xx
+            else
+                value | :read_text(body_path)
+                if :ends_with(name, "[]")
+                    list | []
+                    if :has(params, name) => list |= params[name]
+                    :put_last!(list, value)
+                    :update!(params[name], list)
+                else
+                    :update!(params[name], value)
+                xx
+            xx
+        xx
+    xx
+    :update!(out["params"], params)
+    :update!(out["files"], files)
+    return out
+xx

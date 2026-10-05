@@ -1,0 +1,362 @@
+/// lib/storage.gbln
+/// Active Storage with the Disk service: blobs, attachments, variants,
+/// video previews and the signed URLs that reach them.
+///
+/// Files live under storage/ in Active Storage's xx/yy/key layout; nginx
+/// serves them (send_file through X-Accel-Redirect). bin/storage does the
+/// byte work -- copying, MD5, probing and scaling with ffmpeg, as Active
+/// Storage's own analyzers and previewers shell out to ffprobe and ffmpeg.
+
+import lib/db as db
+import lib/auth as auth
+import lib/http as http
+import lib/ojson as ojson
+import lib/multipart as multipart
+
+STORAGE_ROOT | "storage"
+BASE36 | ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
+
+/// config.active_storage.variable_content_types, less what config/initializers/vips.rb removes
+VARIABLE_TYPES | ["image/png", "image/gif", "image/jpeg", "image/tiff", "image/webp", "image/avif", "image/heic", "image/heif"]
+WEB_IMAGE_TYPES | ["image/png", "image/jpeg", "image/gif"]
+ALLOWED_INLINE | ["image/webp", "image/avif", "image/png", "image/gif", "image/jpeg", "image/tiff", "image/bmp", "image/vnd.adobe.photoshop", "image/vnd.microsoft.icon", "application/pdf"]
+SERVE_AS_BINARY | ["text/html", "image/svg+xml", "application/postscript", "application/x-shockwave-flash", "text/xml", "application/xml", "application/xhtml+xml", "application/mathml+xml", "text/cache-manifest"]
+
+/// Marcel's extension for the formats variants are written in
+FORMAT_TYPES | {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp"}
+TYPE_EXTENSIONS | {"image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif", "image/webp": "webp", "image/tiff": "tiff", "image/avif": "avif", "image/heic": "heic", "image/heif": "heif"}
+
+THUMB_LIMIT | [1200, 800]
+
+/// Message::THUMBNAIL_MAX_WIDTH and _HEIGHT (a global of another module
+/// cannot be indexed across modules, so they are read through these).
+act thumb_width()
+    return THUMB_LIMIT[0]
+xx
+
+act thumb_height()
+    return THUMB_LIMIT[1]
+xx
+
+/// ActiveStorage::Blob.generate_unique_secure_token: 28 base36 characters
+act new_key()
+    return auth::random_from(BASE36, 28)
+xx
+
+act file_path(key)
+    return STORAGE_ROOT + "/" + key[0:2] + "/" + key[2:4] + "/" + key
+xx
+
+/// Reads a "a<TAB>b<TAB>..." line bin/storage wrote, then removes the file.
+act read_fields(path)
+    if :file_exists(path) == false => return []
+    line | :trim(:read_text(path))
+    :delete_path!(path)
+    return :split(line, "\t")
+xx
+
+act tmp_out()
+    return "/tmp/campfire-storage-" + new_key()
+xx
+
+act filename_base(filename)
+    if :has(filename, ".") == false => return filename
+    return :before_last(filename, ".")
+xx
+
+act filename_extension(filename)
+    if :has(filename, ".") == false => return ""
+    return :lower(:after_last(filename, "."))
+xx
+
+/// Marcel.identify: the magic bytes decide, unless they only say "some
+/// binary" or "some text", when the declared type (or extension) refines it.
+act identify(sniffed, declared)
+    vague | ["application/octet-stream", "text/plain", "application/zip", "inode/x-empty", "application/x-empty"]
+    if :has(vague, sniffed) and declared != "" and declared != "application/octet-stream" => return declared
+    if sniffed == "image/x-ms-bmp" => return "image/bmp"
+    return sniffed
+xx
+
+/// Rounds like Ruby's Float#round for the halves vips meets.
+act round(x)
+    return :int(:floor(x + 0.5))
+xx
+
+/// Ruby's Float#to_s for the values the views print
+act ruby_float(x)
+    s | :str(x * 1.0)
+    if :has(s, ".") or :has(s, "e") or :has(s, "N") or :has(s, "inf") => return s
+    return s + ".0"
+xx
+
+/// The analyzed metadata, as Active Storage writes it (JSON text: video
+/// dimensions are floats, image dimensions integers).
+act analyze(path, content_type)
+    if :starts_with(content_type, "image/") and :has(VARIABLE_TYPES, content_type)
+        out | tmp_out()
+        multipart::storage_cmd(["probe", path, out])
+        f | read_fields(out)
+        if :len(f) >= 2 and f[0] != "" and f[1] != ""
+            return "\{\"identified\":true,\"width\":" + f[0] + ",\"height\":" + f[1] + ",\"analyzed\":true}"
+        xx
+        return "\{\"identified\":true,\"analyzed\":true}"
+    xx
+    if :starts_with(content_type, "video/")
+        out | tmp_out()
+        multipart::storage_cmd(["probe", path, out])
+        f | read_fields(out)
+        while :len(f) < 5
+            :put_last!(f, "")
+        xx
+        parts | ["\"identified\":true"]
+        if f[0] != "" and f[1] != ""
+            :put_last!(parts, "\"width\":" + ruby_float(:float(f[0])))
+            :put_last!(parts, "\"height\":" + ruby_float(:float(f[1])))
+        xx
+        if f[2] != "" and f[2] != "N/A" => :put_last!(parts, "\"duration\":" + ruby_float(:float(f[2])))
+        if :has(f[4], ":")
+            r | :split(f[4], ":")
+            if r[0] != "0" => :put_last!(parts, "\"display_aspect_ratio\":[" + r[0] + "," + r[1] + "]")
+        xx
+        :put_last!(parts, "\"audio\":" + :str(f[3] == "true"))
+        :put_last!(parts, "\"video\":true")
+        :put_last!(parts, "\"analyzed\":true")
+        return "\{" + :join(parts, ",") + "}"
+    xx
+    return "\{\"identified\":true,\"analyzed\":true}"
+xx
+
+act insert_blob(key, filename, content_type, metadata, size, checksum)
+    return db::value("insert into active_storage_blobs (key, filename, content_type, metadata, service_name, byte_size, checksum, created_at) values ($1, $2, $3, $4, 'local', $5, $6, utc_now()) returning id", [key, filename, content_type, metadata, size, checksum])
+xx
+
+/// ActiveStorage::Blob.create_and_upload! from an upload, analyzed.
+act create_blob(upload)
+    key | new_key()
+    out | tmp_out()
+    if multipart::storage_cmd(["ingest", upload["path"], file_path(key), out]) == false => return nil
+    f | read_fields(out)
+    if :len(f) < 3 => return nil
+    content_type | identify(f[2], upload["content_type"])
+    metadata | analyze(file_path(key), content_type)
+    id | insert_blob(key, upload["filename"], content_type, metadata, :int(f[0]), f[1])
+    return by_id(id)
+xx
+
+act by_id(id)
+    return db::doc("select json_build_object('id', b.id, 'key', b.key, 'filename', b.filename, 'content_type', b.content_type, 'byte_size', b.byte_size, 'metadata', b.metadata, 'signed_id', campfire_blob_signed_id(b.id)) from active_storage_blobs b where b.id = $1", [id])
+xx
+
+act metadata(b)
+    if b["metadata"] == nil or b["metadata"] == "" => return {}
+    return :json_parse(b["metadata"])
+xx
+
+/// The metadata's width and height as Ruby holds them: [value, is_float]
+/// pairs, nil when absent.
+act dimensions(b)
+    raw | b["metadata"]
+    if raw == nil => return nil
+    w | html_number(raw, "width")
+    h | html_number(raw, "height")
+    if w == nil or h == nil => return nil
+    return [w, h]
+xx
+
+act html_number(raw, name)
+    found | :get_matching(raw, "\"" + name + "\":(-?[0-9.]+)")
+    if found == nil or :len(found) == 0 => return nil
+    /// Goblin reads a numeric piece of a string back as a number, so
+    /// whether the metadata held a float is decided on the match itself.
+    whole | :str(found[0])
+    return [:float(:after(whole, ":")), :is_matching(whole, "\\.")]
+xx
+
+act variable(b)
+    return :has(VARIABLE_TYPES, b["content_type"])
+xx
+
+/// Active Storage's video previewer (ffmpeg is present); no PDF previewer
+/// is installed for the original either.
+act previewable(b)
+    return :starts_with(b["content_type"], "video/")
+xx
+
+act web_image(b)
+    return :has(WEB_IMAGE_TYPES, b["content_type"])
+xx
+
+/// Blob#format: the extension, when Marcel agrees it means the content type
+act blob_format(b)
+    ext | filename_extension(b["filename"])
+    if ext != "" and :has(FORMAT_TYPES, ext) and FORMAT_TYPES[ext] == b["content_type"] => return ext
+    if :has(TYPE_EXTENSIONS, b["content_type"]) => return TYPE_EXTENSIONS[b["content_type"]]
+    return "png"
+xx
+
+act default_variant_format(b)
+    if web_image(b) => return blob_format(b)
+    return "png"
+xx
+
+/// ---------- variations ----------
+
+/// A variation as [format, width, height, json] -- json is the key's data,
+/// in the transformations' own order.
+act variation(format, w, h, format_first)
+    if format_first => return [format, w, h, "\{\"format\":\"" + format + "\",\"resize_to_limit\":[" + :str(w) + "," + :str(h) + "]}"]
+    return [format, w, h, "\{\"resize_to_limit\":[" + :str(w) + "," + :str(h) + "],\"format\":\"" + format + "\"}"]
+xx
+
+/// Message::Attachment's :thumb, defaulted to the blob's format
+act thumb_variation(b)
+    return variation(default_variant_format(b), THUMB_LIMIT[0], THUMB_LIMIT[1], true)
+xx
+
+/// The video poster: preview(format: :webp, resize_to_limit: [1200, 800])
+act poster_variation()
+    return variation("webp", THUMB_LIMIT[0], THUMB_LIMIT[1], true)
+xx
+
+act variation_key(v)
+    return db::value("select campfire_sign($1, 'active_storage') as v", ["\{\"_rails\":\{\"data\":" + v[3] + ",\"pur\":\"variation\"}}"])
+xx
+
+/// Variation.decode: [format, width, height, json] from a signed key, or nil
+act decode_variation(key)
+    data | db::value("select campfire_as_verified($1, 'variation') as v", [key])
+    if data == nil => return nil
+    t | :json_parse(data)
+    if :is_map(t) == false or :has(t, "resize_to_limit") == false => return nil
+    lim | t["resize_to_limit"]
+    format | "png"
+    if :has(t, "format") => format |= t["format"]
+    if :has(FORMAT_TYPES, format) == false => return nil
+    return [format, :int(lim[0]), :int(lim[1]), data]
+xx
+
+/// resize_to_limit: the size that fits within w x h, never enlarged
+act limit_size(dims, w, h)
+    if dims == nil => return [w, h]
+    sw | dims[0][0]
+    sh | dims[1][0]
+    if sw <= w and sh <= h => return [:int(sw), :int(sh)]
+    scale | w / sw
+    if h / sh < scale => scale |= h / sh
+    nw | round(sw * scale)
+    nh | round(sh * scale)
+    if nw < 1 => nw |= 1
+    if nh < 1 => nh |= 1
+    return [nw, nh]
+xx
+
+/// Processes a variant of an image blob (or returns the one processed
+/// before) and returns its blob.
+act variant(b, v)
+    existing | db::value("select campfire_variant_blob($1, $2) as v", [b["id"], v[3]])
+    if existing != nil => return by_id(existing)
+    dims | dimensions(b)
+    size | limit_size(dims, v[1], v[2])
+    key | new_key()
+    out | tmp_out()
+    if multipart::storage_cmd(["resize", file_path(b["key"]), file_path(key), size[0], size[1], v[0], out]) == false => return nil
+    f | read_fields(out)
+    if :len(f) < 3 => return nil
+    id | insert_blob(key, filename_base(b["filename"]) + "." + v[0], FORMAT_TYPES[v[0]], "\{\"identified\":true}", :int(f[0]), f[1])
+    db::exec("select campfire_attach_variant($1, $2, $3)", [b["id"], v[3], id])
+    return by_id(id)
+xx
+
+/// A video's preview image (its first frame), attached to the blob
+act preview_image(b)
+    existing | db::doc("select campfire_attached('ActiveStorage::Blob', $1, 'preview_image')", [b["id"]])
+    if existing != nil => return existing
+    key | new_key()
+    out | tmp_out()
+    if multipart::storage_cmd(["frame", file_path(b["key"]), file_path(key), out]) == false => return nil
+    f | read_fields(out)
+    if :len(f) < 3 => return nil
+    id | insert_blob(key, filename_base(b["filename"]) + ".jpg", "image/jpeg", "\{\"identified\":true}", :int(f[0]), f[1])
+    db::exec("select campfire_attach('ActiveStorage::Blob', $1, 'preview_image', $2)", [b["id"], id])
+    pb | by_id(id)
+    /// The frame has the video's size; the variant needs it.
+    :update!(pb["metadata"], b["metadata"])
+    return pb
+xx
+
+/// Blob#representation(v).processed: the blob holding the representation
+act representation(b, v)
+    if variable(b) => return variant(b, v)
+    if previewable(b)
+        img | preview_image(b)
+        if img == nil => return nil
+        if :has(img, "metadata") == false or img["metadata"] == nil or :has(img["metadata"], "width") == false => :update!(img["metadata"], b["metadata"])
+        return variant(img, v)
+    xx
+    return nil
+xx
+
+/// Message#process_attachment: the thumbnail (or video poster) up front
+act process_attachment(b)
+    if previewable(b)
+        representation(b, poster_variation())
+    elif variable(b)
+        representation(b, thumb_variation(b))
+    xx
+xx
+
+/// ---------- URLs ----------
+
+/// A URL path segment as Rails escapes route parameters
+act path_escape(s)
+    return http::encode_except(s, "^[A-Za-z0-9_.~!$&'()*+,;=:@-]$")
+xx
+
+act blob_path(b, disposition)
+    p | "/rails/active_storage/blobs/redirect/" + b["signed_id"] + "/" + path_escape(b["filename"])
+    if disposition != "" => p |= p + "?disposition=" + disposition
+    return p
+xx
+
+act representation_path(b, v)
+    return "/rails/active_storage/representations/redirect/" + b["signed_id"] + "/" + variation_key(v) + "/" + path_escape(b["filename"])
+xx
+
+/// Blob#content_type_for_serving and #forced_disposition_for_serving
+act serving_type(b)
+    if :has(SERVE_AS_BINARY, b["content_type"]) => return "application/octet-stream"
+    return b["content_type"]
+xx
+
+act serving_disposition(b, requested)
+    if :has(SERVE_AS_BINARY, b["content_type"]) or :has(ALLOWED_INLINE, b["content_type"]) == false => return "attachment"
+    if requested == "attachment" => return "attachment"
+    return "inline"
+xx
+
+/// ActionDispatch::Http::ContentDisposition.format: an ASCII filename with
+/// non-ASCII characters as "?", then the UTF-8 one.
+act content_disposition(kind, filename)
+    ascii | ""
+    for ch in :chars(filename)
+        c | :str(ch)
+        if :ord(c) > 127
+            ascii |= ascii + "%3F"
+        elif :is_matching(c, "^[\\x00-\\x1f\\x7f\"%]$")
+            ascii |= ascii + http::pct(:ord(c))
+        else
+            ascii |= ascii + c
+        xx
+    xx
+    utf8 | http::encode_except(filename, "^[A-Za-z0-9!#$&+.^_`|~-]$")
+    return kind + "; filename=\"" + ascii + "\"; filename*=UTF-8''" + utf8
+xx
+
+/// Blob#url on the Disk service: an expiring, signed /rails/active_storage/disk URL
+act disk_url(req, b, requested)
+    disposition | content_disposition(serving_disposition(b, requested), b["filename"])
+    data | ojson::encode(ojson::object([["key", b["key"]], ["disposition", disposition], ["content_type", serving_type(b)], ["service_name", "local"]]))
+    encoded | db::value("select campfire_disk_key($1) as v", [data])
+    return req["base"] + "/rails/active_storage/disk/" + encoded + "/" + path_escape(b["filename"])
+xx

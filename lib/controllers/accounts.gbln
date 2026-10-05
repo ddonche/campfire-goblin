@@ -5,6 +5,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/storage as storage
 import lib/views/layout as layout
 import lib/views/accounts as account_views
 import lib/views/room_forms as room_forms
@@ -90,6 +91,18 @@ act update(c)
         any |= true
         value | http::param(req, key) == "true"
         db::exec("update accounts set settings = jsonb_set(coalesce(settings, '{}')::jsonb, '{restrict_room_creation_to_administrators}', to_jsonb($2::boolean))::json, updated_at = utc_now() where id = $1", [aid, value])
+    xx
+    logo | nil
+    if :has(req["files"], "account[logo]") => logo |= req["files"]["account[logo]"]
+    if logo != nil
+        any |= true
+        b | storage::create_blob(logo)
+        if b != nil
+            db::exec("select campfire_attach('Account', $1, 'logo', $2)", [aid, b["id"]])
+            storage::representation(b, storage::variation("png", 512, 512, false))
+            storage::representation(b, storage::variation("png", 192, 192, false))
+            db::exec("update accounts set updated_at = utc_now() where id = $1", [aid])
+        xx
     xx
     if any == false and http::has_param(req, "account[logo]") == false => return http::head(400)
     c |= auth::flash_next(c, "notice", "✓")

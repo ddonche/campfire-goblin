@@ -3,6 +3,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/storage as storage
 import lib/ojson as ojson
 import lib/html as html
 import lib/views/messages as message_views
@@ -111,7 +112,9 @@ act create(c, room_id)
     if room == nil => return room_not_found(c)
     body | nil
     if http::has_param(req, "message[body]") => body |= http::param(req, "message[body]")
-    m | post(c, room, body, http::param(req, "message[client_message_id]"))
+    upload | nil
+    if :has(req["files"], "message[attachment]") => upload |= req["files"]["message[attachment]"]
+    m | post_with(c, room, body, http::param(req, "message[client_message_id]"), upload)
     return http::turbo_stream(cable::stream_tag("append", "messages_" + html::room_key(room), message_views::single(stream_context(c), m)) + "\n")
 xx
 
@@ -119,6 +122,12 @@ xx
 /// message stream, then tell each member's unread-rooms stream. Returns
 /// the message.
 act post(c, room, raw_body, client_id)
+    return post_with(c, room, raw_body, client_id, nil)
+xx
+
+/// Message.create_with_attachment!: the message, with an uploaded file
+/// attached and its thumbnail (or video poster) processed.
+act post_with(c, room, raw_body, client_id, upload)
     body | nil
     plain | ""
     if raw_body != nil
@@ -127,6 +136,14 @@ act post(c, room, raw_body, client_id)
     xx
     created | db::doc("select campfire_create_message($1, $2, $3, $4, $5)", [c["user"]["id"], room["id"], body, client_id, plain])
     m | created["message"]
+    if upload != nil
+        b | storage::create_blob(upload)
+        if b != nil
+            db::exec("select campfire_attach('Message', $1, 'attachment', $2)", [m["id"], b["id"]])
+            storage::process_attachment(b)
+            m |= db::doc("select campfire_message_json(m) from messages m where m.id = $1", [m["id"]])
+        xx
+    xx
     stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [room["type"], room["id"]])
     cable::broadcast(stream, cable::stream_tag("append", "messages_" + html::room_key(room), message_views::single(broadcast_context(c), m)))
     streams | []

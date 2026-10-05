@@ -210,6 +210,8 @@ CREATE INDEX index_cable_broadcasts_on_stream_and_id ON cable_broadcasts (stream
 --   signed_id   ActiveRecord signed ids (avatar tokens)       urlsafe base64
 --   sgid        signed global ids (mentions in rich text)    urlsafe base64, HMAC-SHA1
 --   turbo       Turbo signed stream names                    strict base64
+--   active_storage  ActiveStorage.verifier (blob ids, variation keys, disk keys)
+--                                                            strict base64, HMAC-SHA1
 CREATE FUNCTION campfire_b64(data text, urlsafe boolean) RETURNS text LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE WHEN urlsafe
     THEN rtrim(translate(encode(convert_to(data, 'UTF8'), 'base64'), E'+/\n', '-_'), '=')
@@ -222,12 +224,12 @@ $$;
 
 CREATE FUNCTION campfire_digest(data text, purpose text) RETURNS text LANGUAGE sql STABLE AS $$
   SELECT encode(hmac(convert_to(data, 'UTF8'), decode(current_setting('app.key_' || purpose), 'hex'),
-    CASE WHEN purpose = 'sgid' THEN 'sha1' ELSE 'sha256' END), 'hex')
+    CASE WHEN purpose IN ('sgid', 'active_storage') THEN 'sha1' ELSE 'sha256' END), 'hex')
 $$;
 
 CREATE FUNCTION campfire_sign(data text, purpose text) RETURNS text LANGUAGE sql STABLE AS $$
   SELECT b64 || '--' || campfire_digest(b64, purpose)
-  FROM (SELECT campfire_b64(data, purpose <> 'turbo') AS b64) s
+  FROM (SELECT campfire_b64(data, purpose NOT IN ('turbo', 'active_storage')) AS b64) s
 $$;
 
 CREATE FUNCTION campfire_verify(signed text, purpose text) RETURNS text LANGUAGE sql STABLE AS $$
@@ -272,6 +274,100 @@ CREATE FUNCTION utc_now() RETURNS timestamp LANGUAGE sql STABLE AS $$
   SELECT (now() AT TIME ZONE 'utc')::timestamp
 $$;
 
+-- ---------- Active Storage ----------
+
+-- Blob#signed_id and the Disk service's folder layout (xx/yy/key).
+CREATE FUNCTION campfire_blob_signed_id(blob_id bigint) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT campfire_sign('{"_rails":{"data":' || blob_id || ',"pur":"blob_id"}}', 'active_storage')
+$$;
+
+CREATE FUNCTION campfire_blob_path(key text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT substr(key, 1, 2) || '/' || substr(key, 3, 2) || '/' || key
+$$;
+
+-- Variation#digest identifies a variant record. (Rails digests the
+-- Marshal dump of the transformations; Goblin has no Marshal, so the
+-- port digests the variation key's JSON. Only the port reads it.)
+CREATE FUNCTION campfire_variation_digest(transformations text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT encode(digest(convert_to(transformations, 'UTF8'), 'sha1'), 'base64')
+$$;
+
+-- The blob a variant was processed into, if it has been.
+CREATE FUNCTION campfire_variant_blob(p_blob bigint, transformations text) RETURNS bigint LANGUAGE sql STABLE AS $$
+  SELECT a.blob_id FROM active_storage_variant_records v
+  JOIN active_storage_attachments a ON a.record_type = 'ActiveStorage::VariantRecord' AND a.record_id = v.id AND a.name = 'image'
+  WHERE v.blob_id = p_blob AND v.variation_digest = campfire_variation_digest(transformations)
+  ORDER BY a.id DESC LIMIT 1
+$$;
+
+-- An attached blob of a record, as JSON (nil when nothing is attached).
+CREATE FUNCTION campfire_attached(p_type text, p_record bigint, p_name text) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT json_build_object('id', b.id, 'key', b.key, 'filename', b.filename, 'content_type', b.content_type,
+    'byte_size', b.byte_size, 'metadata', b.metadata, 'signed_id', campfire_blob_signed_id(b.id))
+  FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id = a.blob_id
+  WHERE a.record_type = p_type AND a.record_id = p_record AND a.name = p_name ORDER BY a.id DESC LIMIT 1
+$$;
+
+-- Records a processed variant: its record and the attachment of its blob.
+CREATE FUNCTION campfire_attach_variant(p_blob bigint, transformations text, p_variant_blob bigint) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE rec bigint;
+BEGIN
+  INSERT INTO active_storage_variant_records (blob_id, variation_digest)
+  VALUES (p_blob, campfire_variation_digest(transformations))
+  ON CONFLICT (blob_id, variation_digest) DO UPDATE SET variation_digest = EXCLUDED.variation_digest
+  RETURNING id INTO rec;
+  INSERT INTO active_storage_attachments (blob_id, created_at, name, record_id, record_type)
+  VALUES (p_variant_blob, utc_now(), 'image', rec, 'ActiveStorage::VariantRecord');
+END $$;
+
+-- has_one_attached assignment: the new blob replaces what was attached
+-- (purge_later of the old blob is left to its files staying on disk).
+CREATE FUNCTION campfire_attach(p_type text, p_record bigint, p_name text, p_blob bigint) RETURNS void LANGUAGE sql AS $$
+  DELETE FROM active_storage_attachments WHERE record_type = p_type AND record_id = p_record AND name = p_name;
+  INSERT INTO active_storage_attachments (blob_id, created_at, name, record_id, record_type)
+  VALUES (p_blob, utc_now(), p_name, p_record, p_type);
+$$;
+
+-- An expiring disk-service key (DiskService#generate_url): signed JSON of
+-- the blob key, disposition and content type, for five minutes.
+CREATE FUNCTION campfire_disk_key(data_json text) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT campfire_sign('{"_rails":{"data":' || data_json || ',"exp":"' ||
+    to_char(utc_now() + interval '5 minutes', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') || '","pur":"blob_key"}}', 'active_storage')
+$$;
+
+-- A verified ActiveStorage message's data for a purpose, or NULL when the
+-- signature, purpose or expiry does not hold.
+CREATE FUNCTION campfire_as_verified(signed text, purpose text) RETURNS text LANGUAGE plpgsql STABLE AS $$
+DECLARE raw text; doc jsonb;
+BEGIN
+  IF signed IS NULL OR position('--' IN signed) = 0 THEN RETURN NULL; END IF;
+  IF campfire_digest(split_part(signed, '--', 1), 'active_storage') IS DISTINCT FROM split_part(signed, '--', 2) THEN RETURN NULL; END IF;
+  raw := convert_from(decode(split_part(signed, '--', 1), 'base64'), 'UTF8');
+  doc := raw::jsonb -> '_rails';
+  IF doc IS NULL OR doc ->> 'pur' IS DISTINCT FROM purpose THEN RETURN NULL; END IF;
+  IF doc ->> 'exp' IS NOT NULL AND (doc ->> 'exp')::timestamptz < now() THEN RETURN NULL; END IF;
+  RETURN (doc -> 'data')::text;
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END $$;
+
+-- The stored file (relative to storage/) of an account logo or user avatar
+-- variant, once processed; see lib/storage.gbln.
+CREATE FUNCTION campfire_logo_file(small boolean) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT campfire_blob_path(vb.key)
+  FROM active_storage_attachments a
+  JOIN active_storage_blobs vb ON vb.id = campfire_variant_blob(a.blob_id,
+    CASE WHEN small THEN '{"resize_to_limit":[192,192],"format":"png"}' ELSE '{"resize_to_limit":[512,512],"format":"png"}' END)
+  WHERE a.record_type = 'Account' AND a.name = 'logo' ORDER BY a.id DESC LIMIT 1
+$$;
+
+CREATE FUNCTION campfire_avatar_file(user_id bigint) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT campfire_blob_path(vb.key)
+  FROM active_storage_attachments a
+  JOIN active_storage_blobs vb ON vb.id = campfire_variant_blob(a.blob_id, '{"resize_to_limit":[512,512],"format":"webp"}')
+  WHERE a.record_type = 'User' AND a.name = 'avatar' AND a.record_id = user_id ORDER BY a.id DESC LIMIT 1
+$$;
+
 -- The user fields the views print (User#title, fresh_user_avatar_path, ...).
 CREATE FUNCTION campfire_user_json(u users) RETURNS json LANGUAGE sql STABLE AS $$
   SELECT json_build_object(
@@ -309,11 +405,7 @@ CREATE FUNCTION campfire_message_json(m messages) RETURNS json LANGUAGE sql STAB
     'mentions', (SELECT json_object_agg(x.sgid, campfire_user_json(u))
                  FROM (SELECT DISTINCT (regexp_matches(rt.body, 'sgid="([^"]+)"', 'g'))[1] AS sgid) x
                  JOIN users u ON u.id = substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint),
-    'attachment', (SELECT json_build_object('id', bl.id, 'filename', bl.filename, 'content_type', bl.content_type,
-                     'byte_size', bl.byte_size, 'metadata', bl.metadata,
-                     'path', '/rails/active_storage/blobs/redirect/' || campfire_sign('{"_rails":{"data":' || bl.id || ',"pur":"blob_id"}}', 'signed_id') || '/' || bl.filename)
-                   FROM active_storage_attachments a JOIN active_storage_blobs bl ON bl.id = a.blob_id
-                   WHERE a.record_type = 'Message' AND a.record_id = m.id AND a.name = 'attachment'))
+    'attachment', campfire_attached('Message', m.id, 'attachment'))
   FROM (SELECT (SELECT body FROM action_text_rich_texts WHERE record_type = 'Message' AND record_id = m.id AND name = 'body') AS body) rt
 $$;
 
@@ -481,19 +573,6 @@ EXCEPTION WHEN others THEN
   RETURN NULL;
 END $$;
 
--- The stored file (relative to storage/) for an account logo or user avatar
--- variant, when one has been uploaded; see lib/storage.gbln.
-CREATE FUNCTION campfire_logo_file(small boolean) RETURNS text LANGUAGE sql STABLE AS $$
-  SELECT b.key || CASE WHEN small THEN '-small' ELSE '-large' END || '.png'
-  FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id = a.blob_id
-  WHERE a.record_type = 'Account' AND a.name = 'logo' ORDER BY a.id DESC LIMIT 1
-$$;
-
-CREATE FUNCTION campfire_avatar_file(user_id bigint) RETURNS text LANGUAGE sql STABLE AS $$
-  SELECT b.key || '-square.webp'
-  FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id = a.blob_id
-  WHERE a.record_type = 'User' AND a.name = 'avatar' AND a.record_id = user_id ORDER BY a.id DESC LIMIT 1
-$$;
 
 -- A message the user can reach (in one of their rooms), optionally only in
 -- one room, with what the edit form needs: mentioned users by stored sgid,

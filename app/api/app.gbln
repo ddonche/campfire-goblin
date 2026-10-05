@@ -14,4 +14,6 @@ c | auth::context(req)
 res | router::dispatch(c)
 if :has(res, "context") => c |= res["context"]
 res |= auth::finish(c, res)
+/// the upload's sliced parts, once the request is done with them
+if req["parts_dir"] != "" and :file_exists(req["parts_dir"]) => :delete_path!(req["parts_dir"])
 http::emit(res)

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# bin/storage -- the byte-level work behind lib/storage.gbln and
+# lib/multipart.gbln, run through Goblin's :run_cmd.
+#
+# Goblin strings are UTF-8 text and the language has no byte buffers, hash
+# functions or media codecs, so the steps that touch raw bytes live here:
+# slicing a multipart body, MD5 checksums, and the ffprobe/ffmpeg calls
+# Active Storage itself makes (its analyzers and previewers shell out to
+# the same tools). Everything else -- parsing part headers, building blobs,
+# variants, signed URLs -- is Goblin. Results are written to files, never
+# stdout, because :run_cmd runs a login shell whose profile may print.
+#
+#   bin/storage split FILE BOUNDARY OUTDIR
+#       Writes OUTDIR/N.head (the part's header lines) and OUTDIR/N.body
+#       (its raw bytes) for each part, and OUTDIR/count.
+#   bin/storage ingest SRC DEST OUT
+#       Copies SRC to DEST and writes "size<TAB>md5-base64<TAB>mime" to OUT.
+#   bin/storage probe SRC OUT
+#       Writes "width<TAB>height<TAB>duration<TAB>audio<TAB>dar" to OUT.
+#   bin/storage resize SRC DEST WIDTH HEIGHT FORMAT OUT
+#       Scales SRC (first frame) to WIDTHxHEIGHT as FORMAT; then as ingest.
+#   bin/storage frame SRC DEST OUT
+#       The first video frame as JPEG (-y -vframes 1 -f image2); then as ingest.
+set -u
+cmd=$1; shift
+
+checksum() { openssl md5 -binary "$1" | base64; }
+
+describe() { # FILE OUT
+  local size mime
+  size=$(wc -c < "$1" | tr -d ' ')
+  mime=$(file --brief --mime-type "$1")
+  printf '%s\t%s\t%s\n' "$size" "$(checksum "$1")" "$mime" > "$2"
+}
+
+case "$cmd" in
+  split)
+    file=$1; boundary=$2; out=$3
+    mkdir -p "$out"
+    delim="--$boundary"
+    mapfile -t offsets < <(LC_ALL=C grep -abo -- "$delim" "$file" | cut -d: -f1)
+    n=0
+    for ((i = 0; i + 1 < ${#offsets[@]}; i++)); do
+      start=$(( offsets[i] + ${#delim} + 2 ))
+      len=$(( offsets[i + 1] - 2 - start ))
+      ((len < 0)) && continue
+      part="$out/part"
+      tail -c +$((start + 1)) "$file" | head -c "$len" > "$part"
+      blank=$(LC_ALL=C grep -abo -m1 $'^\r$' "$part" | head -n1 | cut -d: -f1)
+      [ -z "$blank" ] && continue
+      head -c "$blank" "$part" > "$out/$n.head"
+      tail -c +$((blank + 3)) "$part" > "$out/$n.body"
+      n=$((n + 1))
+    done
+    rm -f "$out/part"
+    # one line per part, so Goblin walks them with a for loop
+    : > "$out/count"
+    for ((j = 0; j < n; j++)); do echo "$j" >> "$out/count"; done
+    ;;
+  ingest)
+    mkdir -p "$(dirname "$2")"
+    cp "$1" "$2"
+    describe "$2" "$3"
+    ;;
+  probe)
+    ffprobe -v error -select_streams v:0 -show_entries stream=width,height,display_aspect_ratio:format=duration \
+      -of default=noprint_wrappers=1 "$1" > "$2.raw" 2>/dev/null
+    w=$(grep '^width=' "$2.raw" | head -n1 | cut -d= -f2)
+    h=$(grep '^height=' "$2.raw" | head -n1 | cut -d= -f2)
+    d=$(grep '^duration=' "$2.raw" | head -n1 | cut -d= -f2)
+    r=$(grep '^display_aspect_ratio=' "$2.raw" | head -n1 | cut -d= -f2)
+    a=$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$1" 2>/dev/null | head -n1)
+    rm -f "$2.raw"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$w" "$h" "$d" "${a:+true}" "$r" > "$2"
+    ;;
+  resize)
+    src=$1; dest=$2; w=$3; h=$4; fmt=$5; out=$6
+    mkdir -p "$(dirname "$dest")"
+    case "$fmt" in
+      webp) codec=libwebp ;; png) codec=png ;; gif) codec=gif ;; *) codec=mjpeg ;;
+    esac
+    ffmpeg -v error -y -i "$src" -frames:v 1 -vf "scale=$w:$h" -f image2 -c:v "$codec" "$dest" < /dev/null
+    describe "$dest" "$out"
+    ;;
+  frame)
+    mkdir -p "$(dirname "$2")"
+    ffmpeg -v error -i "$1" -y -vframes 1 -f image2 -c:v mjpeg "$2" < /dev/null
+    describe "$2" "$3"
+    ;;
+esac

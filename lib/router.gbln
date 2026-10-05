@@ -21,6 +21,7 @@ import lib/controllers/room_parts as room_parts
 import lib/controllers/pwa as pwa_ctl
 import lib/controllers/boosts as boosts
 import lib/controllers/bot_api as bot_api
+import lib/controllers/blobs as blobs
 
 
 act not_found(c)
@@ -92,6 +93,13 @@ act dispatch(c)
     if n == 3 and s[0] == "session" and s[1] == "transfers" and (m == "PUT" or m == "PATCH") => return onboarding::update_transfer(c, s[2])
     if n == 1 and (s[0] == "webmanifest" or s[0] == "webmanifest.json") and m == "GET" => return pwa_ctl::manifest(c)
     if n == 1 and (s[0] == "service-worker" or s[0] == "service-worker.js") and m == "GET" => return pwa_ctl::service_worker(c)
+
+    /// ActiveStorage's engine routes, mounted outside ApplicationController
+    if n >= 4 and s[0] == "rails" and s[1] == "active_storage" and m == "GET"
+        if s[2] == "blobs" and s[3] == "redirect" and n >= 5 => return blobs::show(c, s[4])
+        if s[2] == "representations" and s[3] == "redirect" and n >= 6 => return blobs::representation(c, s[4], s[5])
+        if s[2] == "disk" and n >= 4 => return blobs::disk(c, s[3])
+    xx
 
     /// ---- everything else requires a signed-in user ----
     if auth::signed_in(c) == false => return request_authentication(c)

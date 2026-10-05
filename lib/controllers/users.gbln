@@ -4,6 +4,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/storage as storage
 import lib/cable as cable
 import lib/content as content
 import lib/html as html
@@ -167,6 +168,17 @@ act update_profile(c)
         any |= true
         pw | http::param(req, "user[password]")
         if pw != "" => db::exec("update users set password_digest = crypt($2, gen_salt('bf', 12)), updated_at = utc_now() where id = $1", [uid, pw])
+    xx
+    avatar | nil
+    if :has(req["files"], "user[avatar]") => avatar |= req["files"]["user[avatar]"]
+    if avatar != nil
+        any |= true
+        b | storage::create_blob(avatar)
+        if b != nil
+            db::exec("select campfire_attach('User', $1, 'avatar', $2)", [uid, b["id"]])
+            storage::representation(b, storage::variation("webp", 512, 512, false))
+            db::exec("update users set updated_at = utc_now() where id = $1", [uid])
+        xx
     xx
     if any == false and http::has_param(req, "user[avatar]") == false => return http::head(400)
     notice | "✓"

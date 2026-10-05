@@ -32,7 +32,7 @@ dbname = url.rsplit("/", 1)[1].split("?")[0]
 # Rails' key generator: PBKDF2-SHA256, 1000 iterations, 64-byte keys per salt.
 import hashlib
 for purpose, salt in [("signed_id", "active_record/signed_id"), ("sgid", "signed_global_ids"),
-                      ("turbo", "turbo/signed_stream_verifier_key")]:
+                      ("turbo", "turbo/signed_stream_verifier_key"), ("active_storage", "ActiveStorage")]:
     key = hashlib.pbkdf2_hmac("sha256", secret.encode(), salt.encode(), 1000, 64).hex()
     psql(f"ALTER DATABASE \"{dbname}\" SET app.key_{purpose} = '{key}'")
 

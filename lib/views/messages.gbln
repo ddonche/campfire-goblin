@@ -4,6 +4,7 @@
 import lib/html as html
 import lib/content as content
 import lib/ojson as ojson
+import lib/storage as storage
 
 REACTIONS | [["👍", "Thumbs up"], ["👏", "Clapping"], ["👋", "Waving hand"], ["💪", "Muscle"], ["❤️", "Red heart"], ["😂", "Face with tears of joy"], ["🎉", "Party popper"], ["🔥", "Fire"]]
 
@@ -122,8 +123,8 @@ act actions(c, m, url)
     if att != nil
         download | html::img("download.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
         share | html::img("share.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
-        dl | html::h(att["path"] + "?disposition=attachment")
-        sp | html::h(att["path"])
+        dl | html::h(storage::blob_path(att, "attachment"))
+        sp | html::h(storage::blob_path(att, ""))
         fname | html::h(att["filename"])
         grid |= """          <a class="btn message__action-btn center full-width hide-in-ios-pwa" title="Download" aria-label="Download" href="{dl}">
             {download}
