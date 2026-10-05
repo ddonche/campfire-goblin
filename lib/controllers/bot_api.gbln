@@ -34,6 +34,7 @@ act head_json(status)
     return res
 xx
 
+/// RawRequestBody#raw_request_body (a multipart body is parsed, not raw)
 act raw_body(c)
     b | c["req"]["body"]
     if b == nil => return ""
@@ -87,9 +88,12 @@ xx
 act create(c, room_id)
     room | find_room(c, room_id)
     if room == nil => return head_json(404)
+    upload | nil
+    if :has(c["req"]["files"], "attachment") => upload |= c["req"]["files"]["attachment"]
     body | raw_body(c)
-    if blank(body) and http::has_param(c["req"], "attachment") == false => return head_json(422)
-    m | messages::post(c, room, body, "")
+    if upload != nil => body |= nil
+    if upload == nil and blank(body) => return head_json(422)
+    m | messages::post_with(c, room, body, "", upload)
     res | head_json(201)
     :update!(res["headers"]["Location"], c["req"]["base"] + "/messages/" + :str(m["id"]))
     return res

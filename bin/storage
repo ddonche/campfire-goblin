@@ -13,6 +13,8 @@
 #   bin/storage split FILE BOUNDARY OUTDIR
 #       Writes OUTDIR/N.head (the part's header lines) and OUTDIR/N.body
 #       (its raw bytes) for each part, and OUTDIR/count.
+#   bin/storage unb64 DATA OUT
+#       Writes the urlsafe-base64 DATA decoded, as text.
 #   bin/storage ingest SRC DEST OUT
 #       Copies SRC to DEST and writes "size<TAB>md5-base64<TAB>mime" to OUT.
 #   bin/storage probe SRC OUT
@@ -56,6 +58,10 @@ case "$cmd" in
     # one line per part, so Goblin walks them with a for loop
     : > "$out/count"
     for ((j = 0; j < n; j++)); do echo "$j" >> "$out/count"; done
+    ;;
+  unb64)
+    # urlsafe base64 to text, for a QR code id
+    printf '%s' "$1" | tr '_-' '/+' | base64 -d > "$2" 2>/dev/null || : > "$2"
     ;;
   ingest)
     mkdir -p "$(dirname "$2")"

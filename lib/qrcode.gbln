@@ -1,0 +1,616 @@
+/// lib/qrcode.gbln
+/// A QR Code encoder, byte mode, error correction level H (RQRCode's
+/// default): what
+/// RQRCode::QRCode.new(url).as_svg produces for Campfire's invite and
+/// transfer links, module for module.
+///
+/// Goblin has no bitwise operators, so XOR goes through a nibble table and
+/// shifts are done with integer division. The module grid is a flat list
+/// (0 light, 1 dark, 2 not yet set) because a list of lists copies by value
+/// on every write.
+
+/// Level H, per version: count, total codewords, data codewords -- repeated
+/// for a second block group when the version has one.
+RS_BLOCKS | [[1, 26, 9], [1, 44, 16], [2, 35, 13], [4, 25, 9], [2, 33, 11, 2, 34, 12], [4, 43, 15], [4, 39, 13, 1, 40, 14], [4, 40, 14, 2, 41, 15], [4, 36, 12, 4, 37, 13], [6, 43, 15, 2, 44, 16], [3, 36, 12, 8, 37, 13], [7, 42, 14, 4, 43, 15], [12, 33, 11, 4, 34, 12], [11, 36, 12, 5, 37, 13], [11, 36, 12, 7, 37, 13], [3, 45, 15, 13, 46, 16], [2, 42, 14, 17, 43, 15], [2, 42, 14, 19, 43, 15], [9, 39, 13, 16, 40, 14], [15, 43, 15, 10, 44, 16], [19, 46, 16, 6, 47, 17], [34, 37, 13], [16, 45, 15, 14, 46, 16], [30, 46, 16, 2, 47, 17], [22, 45, 15, 13, 46, 16], [33, 46, 16, 4, 47, 17], [12, 45, 15, 28, 46, 16], [11, 45, 15, 31, 46, 16], [19, 45, 15, 26, 46, 16], [23, 45, 15, 25, 46, 16], [23, 45, 15, 28, 46, 16], [19, 45, 15, 35, 46, 16], [11, 45, 15, 46, 46, 16], [59, 46, 16, 1, 47, 17], [22, 45, 15, 41, 46, 16], [2, 45, 15, 64, 46, 16], [24, 45, 15, 46, 46, 16], [42, 45, 15, 32, 46, 16], [10, 45, 15, 67, 46, 16], [20, 45, 15, 61, 46, 16]]
+
+/// Alignment pattern centres per version
+ALIGNMENT | [[], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34], [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50], [6, 30, 54], [6, 32, 58], [6, 34, 62], [6, 26, 46, 66], [6, 26, 48, 70], [6, 26, 50, 74], [6, 30, 54, 78], [6, 30, 56, 82], [6, 30, 58, 86], [6, 34, 62, 90], [6, 28, 50, 72, 94], [6, 26, 50, 74, 98], [6, 30, 54, 78, 102], [6, 28, 54, 80, 106], [6, 32, 58, 84, 110], [6, 30, 58, 86, 114], [6, 34, 62, 90, 118], [6, 26, 50, 74, 98, 122], [6, 30, 54, 78, 102, 126], [6, 26, 52, 78, 104, 130], [6, 30, 56, 82, 108, 134], [6, 34, 60, 86, 112, 138], [6, 30, 58, 86, 114, 142], [6, 34, 62, 90, 118, 146], [6, 30, 54, 78, 102, 126, 150], [6, 24, 50, 76, 102, 128, 154], [6, 28, 54, 80, 106, 132, 158], [6, 32, 58, 84, 110, 136, 162], [6, 26, 54, 82, 110, 138, 166], [6, 30, 58, 86, 114, 142, 170]]
+
+/// QRMAXBITS for level H: the data bits each version holds
+MAX_BITS | [72, 128, 208, 288, 368, 480, 528, 688, 800, 976, 1120, 1264, 1440, 1576, 1784, 2024, 2264, 2504, 2728, 3080, 3248, 3536, 3712, 4112, 4304, 4768, 5024, 5288, 5608, 5960, 6344, 6760, 7208, 7688, 7888, 8432, 8768, 9136, 9776, 10208]
+
+/// XOR of two nibbles, indexed a * 16 + b
+NIBBLE_XOR | [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11, 5, 4, 7, 6, 1, 0, 3, 2, 13, 12, 15, 14, 9, 8, 11, 10, 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4, 7, 6, 10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5, 11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4, 12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3, 13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2, 14, 15, 12, 13, 10, 11, 8, 9, 6, 7, 4, 5, 2, 3, 0, 1, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+
+/// Goblin's interpreter has no :range, and a while loop cannot declare a
+/// local in its body, so loops walk a list of indexes built here.
+act upto(n)
+    out | []
+    i | 0
+    while i < n
+        :put_last!(out, i)
+        i |= i + 1
+    xx
+    return out
+xx
+
+act span(a, b)
+    out | []
+    i | a
+    while i < b
+        :put_last!(out, i)
+        i |= i + 1
+    xx
+    return out
+xx
+
+/// The UTF-8 bytes of a string (this module imports nothing, so that the
+/// VM engine can run it: see bin/qr.gbln)
+act utf8_bytes(s)
+    out | []
+    for ch in :chars(s)
+        cp | :ord(:str(ch))
+        if cp < 128
+            :put_last!(out, cp)
+        elif cp < 2048
+            :put_last!(out, 192 + idiv(cp, 64))
+            :put_last!(out, 128 + imod(cp, 64))
+        elif cp < 65536
+            :put_last!(out, 224 + idiv(cp, 4096))
+            :put_last!(out, 128 + imod(idiv(cp, 64), 64))
+            :put_last!(out, 128 + imod(cp, 64))
+        else
+            :put_last!(out, 240 + idiv(cp, 262144))
+            :put_last!(out, 128 + imod(idiv(cp, 4096), 64))
+            :put_last!(out, 128 + imod(idiv(cp, 64), 64))
+            :put_last!(out, 128 + imod(cp, 64))
+        xx
+    xx
+    return out
+xx
+
+/// Integer division and remainder (Goblin's / and % give floats)
+act idiv(a, b)
+    return :int(:floor(a / b))
+xx
+
+act imod(a, b)
+    return a - idiv(a, b) * b
+xx
+
+/// XOR of two bytes
+act xor8(a, b)
+    return NIBBLE_XOR[idiv(a, 16) * 16 + idiv(b, 16)] * 16 + NIBBLE_XOR[imod(a, 16) * 16 + imod(b, 16)]
+xx
+
+/// XOR of two numbers of any width, a nibble at a time
+act xorn(a, b)
+    out | 0
+    place | 1
+    x | a
+    y | b
+    for step in upto(16)
+        if x == 0 and y == 0 => return out
+        out |= out + NIBBLE_XOR[imod(x, 16) * 16 + imod(y, 16)] * place
+        x |= idiv(x, 16)
+        y |= idiv(y, 16)
+        place |= place * 16
+    xx
+    return out
+xx
+
+/// GF(256) exponential and logarithm tables, as QRMath builds them
+act gf_tables()
+    exp | []
+    for i in upto(8)
+        :put_last!(exp, 1)
+    xx
+    :update!(exp[1], 2)
+    :update!(exp[2], 4)
+    :update!(exp[3], 8)
+    :update!(exp[4], 16)
+    :update!(exp[5], 32)
+    :update!(exp[6], 64)
+    :update!(exp[7], 128)
+    for i in span(8, 256)
+        :put_last!(exp, xor8(xor8(exp[i - 4], exp[i - 5]), xor8(exp[i - 6], exp[i - 8])))
+    xx
+    log | []
+    for i in upto(256)
+        :put_last!(log, 0)
+    xx
+    for i in upto(255)
+        :update!(log[exp[i]], i)
+    xx
+    return {"exp": exp, "log": log}
+xx
+
+GF | gf_tables()
+
+act gexp(n)
+    k | n
+    while k < 0
+        k |= k + 255
+    xx
+    while k >= 256
+        k |= k - 255
+    xx
+    return GF["exp"][k]
+xx
+
+act glog(n)
+    return GF["log"][n]
+xx
+
+/// ---------- words_in ----------
+
+/// The smallest ver_no whose level-H capacity holds a byte-mode message
+act minimum_version(length)
+    for v in span(1, 41)
+        count_bits | 8
+        if v >= 10 => count_bits |= 16
+        /// :int because a value taken straight from a loop over a
+        /// collection is not usable as a number by the caller
+        if 4 + count_bits + length * 8 < MAX_BITS[v - 1] => return :int(v)
+    xx
+    return 0
+xx
+
+act rs_blocks(ver_no)
+    row | RS_BLOCKS[ver_no - 1]
+    list | []
+    for g in upto(idiv(:len(row), 3))
+        for j in upto(row[g * 3])
+            :put_last!(list, [row[g * 3 + 1], row[g * 3 + 2]])
+        xx
+    xx
+    return list
+xx
+
+/// QRBitBuffer: the mode indicator, the length, the bytes, the terminator
+/// and the pad codewords, as whole bytes.
+act data_codewords(bytes, ver_no, data_count)
+    bits | []
+    count_bits | 8
+    if ver_no >= 10 => count_bits |= 16
+    /// Goblin passes a list by value, so each helper hands its list back
+    bits |= put_bits(bits, 4, 4)
+    bits |= put_bits(bits, :len(bytes), count_bits)
+    for b in bytes
+        bits |= put_bits(bits, b, 8)
+    xx
+    max_bits | data_count * 8
+    /// end_of_message: four zero bits, if they fit
+    if :len(bits) + 4 <= max_bits
+        bits |= put_bits(bits, 0, 4)
+    else
+        for k in upto(max_bits - :len(bits))
+            :put_last!(bits, 0)
+        xx
+    xx
+    while imod(:len(bits), 8) != 0
+        :put_last!(bits, 0)
+    xx
+    codes | []
+    for i in upto(idiv(:len(bits), 8))
+        value | 0
+        for j in upto(8)
+            value |= value * 2 + bits[i * 8 + j]
+        xx
+        :put_last!(codes, value)
+    xx
+    pads | [236, 17]
+    for i in upto(data_count - :len(codes))
+        :put_last!(codes, pads[imod(i, 2)])
+    xx
+    return codes
+xx
+
+act put_bits(bits, value, length)
+    out | bits
+    for i in upto(length)
+        :put_last!(out, imod(idiv(value, pow2(length - i - 1)), 2))
+    xx
+    return out
+xx
+
+act pow2(n)
+    out | 1
+    for i in upto(n)
+        out |= out * 2
+    xx
+    return out
+xx
+
+/// The generator polynomial for `count` error correction codewords
+act rs_polynomial(count)
+    poly | [1]
+    for i in upto(count)
+        next_poly | []
+        for k in upto(:len(poly) + 1)
+            :put_last!(next_poly, 0)
+        xx
+        for j in upto(:len(poly))
+            :update!(next_poly[j], xor8(next_poly[j], poly[j]))
+            :update!(next_poly[j + 1], xor8(next_poly[j + 1], gexp(glog(poly[j]) + i)))
+        xx
+        poly |= next_poly
+    xx
+    return poly
+xx
+
+/// The remainder of the words_in codewords divided by the generator polynomial
+act ec_codewords(words_in, generator)
+    ec_count | :len(generator) - 1
+    rest | []
+    for b in words_in
+        :put_last!(rest, b)
+    xx
+    for i in upto(ec_count)
+        :put_last!(rest, 0)
+    xx
+    for i in upto(:len(words_in))
+        lead | rest[i]
+        if lead != 0
+            factor | glog(lead)
+            for j in upto(:len(generator))
+                :update!(rest[i + j], xor8(rest[i + j], gexp(glog(generator[j]) + factor)))
+            xx
+        xx
+    xx
+    out | []
+    start | :len(words_in)
+    for i in upto(ec_count)
+        :put_last!(out, rest[start + i])
+    xx
+    return out
+xx
+
+/// The final message: words_in blocks interleaved, then error correction blocks
+act message_codewords(bytes, ver_no)
+    blocks | rs_blocks(ver_no)
+    data_total | 0
+    for b in blocks
+        data_total |= data_total + b[1]
+    xx
+    codes | data_codewords(bytes, ver_no, data_total)
+    offset | 0
+    data_blocks | []
+    ec_blocks | []
+    max_data | 0
+    max_ec | 0
+    for b in blocks
+        chunk | []
+        for i in upto(b[1])
+            :put_last!(chunk, codes[offset + i])
+        xx
+        offset |= offset + b[1]
+        :put_last!(data_blocks, chunk)
+        if b[1] > max_data => max_data |= b[1]
+        ec | ec_codewords(chunk, rs_polynomial(b[0] - b[1]))
+        :put_last!(ec_blocks, ec)
+        if :len(ec) > max_ec => max_ec |= :len(ec)
+    xx
+    out | []
+    for i in upto(max_data)
+        for block in data_blocks
+            if i < :len(block) => :put_last!(out, block[i])
+        xx
+    xx
+    for i in upto(max_ec)
+        for block in ec_blocks
+            if i < :len(block) => :put_last!(out, block[i])
+        xx
+    xx
+    return out
+xx
+
+/// ---------- the matrix ----------
+
+/// The BCH-fmt_data format information for level H and a mask_no pattern
+act format_bits(mask_no)
+    fmt_data | 2 * 8 + mask_no
+    d | fmt_data * 1024
+    while bch_digit(d) - 11 >= 0
+        d |= xorn(d, 1335 * pow2(bch_digit(d) - 11))
+    xx
+    return xorn(fmt_data * 1024 + d, 21522)
+xx
+
+/// The BCH-fmt_data ver_no information (version 7 and up)
+act version_bits(ver_no)
+    d | ver_no * 4096
+    while bch_digit(d) - 13 >= 0
+        d |= xorn(d, 7973 * pow2(bch_digit(d) - 13))
+    xx
+    return ver_no * 4096 + d
+xx
+
+act bch_digit(words_in)
+    digit | 0
+    d | words_in
+    while d != 0
+        digit |= digit + 1
+        d |= idiv(d, 2)
+    xx
+    return digit
+xx
+
+act bit_at(value, index)
+    return imod(idiv(value, pow2(index)), 2)
+xx
+
+/// QRMASKCOMPUTATIONS
+act masked(pattern, i, j)
+    if pattern == 0 => return imod(i + j, 2) == 0
+    if pattern == 1 => return imod(i, 2) == 0
+    if pattern == 2 => return imod(j, 3) == 0
+    if pattern == 3 => return imod(i + j, 3) == 0
+    if pattern == 4 => return imod(idiv(i, 2) + idiv(j, 3), 2) == 0
+    if pattern == 5 => return imod(i * j, 2) + imod(i * j, 3) == 0
+    if pattern == 6 => return imod(imod(i * j, 2) + imod(i * j, 3), 2) == 0
+    return imod(imod(i * j, 3) + imod(i + j, 2), 2) == 0
+xx
+
+/// The function patterns: finders, separators, alignment and timing. The
+/// grid is a list of rows (a row holds 0 light, 1 dark, 2 not yet placed);
+/// Goblin copies a list on every write, so rows keep each write to the
+/// width of the code rather than its whole area.
+act common_patterns(ver_no, n)
+    grid | []
+    for i in upto(n)
+        row | []
+        for j in upto(n)
+            :put_last!(row, 2)
+        xx
+        :put_last!(grid, row)
+    xx
+    grid |= place_finder(grid, n, 0, 0)
+    grid |= place_finder(grid, n, n - 7, 0)
+    grid |= place_finder(grid, n, 0, n - 7)
+    for row in ALIGNMENT[ver_no - 1]
+        for col in ALIGNMENT[ver_no - 1]
+            if grid[row][col] == 2
+                for r in span(-2, 3)
+                    for c in span(-2, 3)
+                        dark | 0
+                        if r == 2 or r == -2 or c == 2 or c == -2 or (r == 0 and c == 0) => dark |= 1
+                        :update!(grid[row + r][col + c], dark)
+                    xx
+                xx
+            xx
+        xx
+    xx
+    for i in span(8, n - 8)
+        dark | 0
+        if imod(i, 2) == 0 => dark |= 1
+        :update!(grid[i][6], dark)
+        :update!(grid[6][i], dark)
+    xx
+    return grid
+xx
+
+act place_finder(grid, n, row, col)
+    out | grid
+    for r in span(-1, 8)
+        if row + r >= 0 and row + r < n
+            for c in span(-1, 8)
+                if col + c >= 0 and col + c < n
+                    vert | r >= 0 and r <= 6 and (c == 0 or c == 6)
+                    horiz | c >= 0 and c <= 6 and (r == 0 or r == 6)
+                    square | r >= 2 and r <= 4 and c >= 2 and c <= 4
+                    dark | 0
+                    if vert or horiz or square => dark |= 1
+                    :update!(out[row + r][col + c], dark)
+                xx
+            xx
+        xx
+    xx
+    return out
+xx
+
+/// One pass of make_impl: the format and ver_no information, then the
+/// message, masked. `test` leaves the format and ver_no modules light, as
+/// rqrcode does while it scores the masks.
+act make_impl(base, n, ver_no, codes, mask_no, test)
+    grid | base
+    bits | format_bits(mask_no)
+    for i in upto(15)
+        value | 0
+        if test == false and bit_at(bits, i) == 1 => value |= 1
+        row | i
+        if i >= 6 and i < 8 => row |= i + 1
+        if i >= 8 => row |= n - 15 + i
+        :update!(grid[row][8], value)
+        col | n - i - 1
+        if i >= 8 and i < 9 => col |= 15 - i
+        if i >= 9 => col |= 15 - i - 1
+        :update!(grid[8][col], value)
+    xx
+    fixed | 1
+    if test => fixed |= 0
+    :update!(grid[n - 8][8], fixed)
+    if ver_no >= 7
+        vbits | version_bits(ver_no)
+        for i in upto(18)
+            value | 0
+            if test == false and bit_at(vbits, i) == 1 => value |= 1
+            lo | idiv(i, 3)
+            hi | imod(i, 3) + n - 11
+            :update!(grid[lo][hi], value)
+            :update!(grid[hi][lo], value)
+        xx
+    xx
+    return map_data(grid, n, codes, mask_no)
+xx
+
+/// map_data: the codewords up and down the two-module columns
+act map_data(grid, n, codes, mask_no)
+    out | grid
+    inc | -1
+    row | n - 1
+    bit_index | 7
+    byte_index | 0
+    col | n - 1
+    word | 0
+    if :len(codes) > 0 => word |= codes[0]
+    while col > 0
+        /// the vertical timing pattern shifts the pair, but not the step
+        place | col
+        if place <= 6 => place |= place - 1
+        running | true
+        while running
+            for c in upto(2)
+                if out[row][place - c] == 2
+                    dark | 0
+                    if byte_index < :len(codes)
+                        if imod(idiv(word, pow2(bit_index)), 2) == 1 => dark |= 1
+                    xx
+                    if masked(mask_no, row, place - c) => dark |= 1 - dark
+                    :update!(out[row][place - c], dark)
+                    bit_index |= bit_index - 1
+                    if bit_index == -1
+                        byte_index |= byte_index + 1
+                        bit_index |= 7
+                        if byte_index < :len(codes) => word |= codes[byte_index]
+                    xx
+                xx
+            xx
+            row |= row + inc
+            if row < 0 or row >= n
+                row |= row - inc
+                inc |= 0 - inc
+                running |= false
+            xx
+        xx
+        col |= col - 2
+    xx
+    return out
+xx
+
+/// QRUtil.get_lost_points
+act lost_points(grid, n)
+    points | 0
+    max_index | n - 1
+    /// level 1: same colour in a module's neighbourhood
+    for row in upto(n)
+        this_row | grid[row]
+        above | this_row
+        below | this_row
+        if row > 0 => above |= grid[row - 1]
+        if row < max_index => below |= grid[row + 1]
+        for col in upto(n)
+            same | 0
+            dark | this_row[col]
+            if row > 0
+                if col > 0 and dark == above[col - 1] => same |= same + 1
+                if dark == above[col] => same |= same + 1
+                if col < max_index and dark == above[col + 1] => same |= same + 1
+            xx
+            if col > 0 and dark == this_row[col - 1] => same |= same + 1
+            if col < max_index and dark == this_row[col + 1] => same |= same + 1
+            if row < max_index
+                if col > 0 and dark == below[col - 1] => same |= same + 1
+                if dark == below[col] => same |= same + 1
+                if col < max_index and dark == below[col + 1] => same |= same + 1
+            xx
+            if same > 5 => points |= points + 3 + same - 5
+        xx
+    xx
+    /// level 2: two-by-two blocks of one colour
+    for row in upto(max_index)
+        this_row | grid[row]
+        next_row | grid[row + 1]
+        for col in upto(max_index)
+            v | this_row[col]
+            if v == next_row[col] and v == this_row[col + 1] and v == next_row[col + 1] => points |= points + 3
+        xx
+    xx
+    /// level 3: the finder-like pattern, in rows and in columns
+    for row in upto(n)
+        this_row | grid[row]
+        for col in upto(n - 6)
+            if this_row[col] == 1 and this_row[col + 1] == 0 and this_row[col + 2] == 1 and this_row[col + 3] == 1 and this_row[col + 4] == 1 and this_row[col + 5] == 0 and this_row[col + 6] == 1 => points |= points + 40
+        xx
+    xx
+    for row in upto(n - 6)
+        r0 | grid[row]
+        r1 | grid[row + 1]
+        r2 | grid[row + 2]
+        r3 | grid[row + 3]
+        r4 | grid[row + 4]
+        r5 | grid[row + 5]
+        r6 | grid[row + 6]
+        for col in upto(n)
+            if r0[col] == 1 and r1[col] == 0 and r2[col] == 1 and r3[col] == 1 and r4[col] == 1 and r5[col] == 0 and r6[col] == 1 => points |= points + 40
+        xx
+    xx
+    /// level 4: how far the dark ratio is from half
+    dark_count | 0
+    for row in grid
+        for v in row
+            if v == 1 => dark_count |= dark_count + 1
+        xx
+    xx
+    ratio | dark_count / (n * n)
+    delta | (100 * ratio - 50) / 5
+    if delta < 0 => delta |= 0 - delta
+    return points + delta * 10
+xx
+
+/// The finished modules of a QR code for `text`: a flat list, 0 or 1, with
+/// the module count.
+act encode(text)
+    bytes | utf8_bytes(text)
+    ver_no | minimum_version(:len(bytes))
+    if ver_no == 0 => return nil
+    n | ver_no * 4 + 17
+    base | common_patterns(ver_no, n)
+    codes | message_codewords(bytes, ver_no)
+    best | 0
+    best_points | 0
+    for mask_no in upto(8)
+        points | lost_points(make_impl(base, n, ver_no, codes, mask_no, true), n)
+        if mask_no == 0 or points < best_points
+            best_points |= points
+            best |= mask_no
+        xx
+    xx
+    return {"rows": make_impl(base, n, ver_no, codes, best, false), "count": n}
+xx
+
+/// RQRCode's as_svg(viewbox: true, fill: :white, color: :black): module
+/// size 11, no quiet zone, one rect per dark module.
+act svg(text)
+    code | encode(text)
+    if code == nil => return nil
+    n | code["count"]
+    grid | code["rows"]
+    size | 11
+    border | 0
+    dimension | (n + border * 2) * size
+    parts | ["<?xml version=\"1.0\" standalone=\"yes\"?><svg version=\"1.1\" xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" xmlns:ev=\"http://www.w3.org/2001/xml-events\" viewBox=\"0 0 {dimension} {dimension}\" shape-rendering=\"crispEdges\"><rect width=\"{dimension}\" height=\"{dimension}\" x=\"0\" y=\"0\" fill=\"white\"/>"]
+    for row in upto(n)
+        this_row | grid[row]
+        for col in upto(n)
+            if this_row[col] == 1
+                x | (col + border) * size
+                y | (row + border) * size
+                :put_last!(parts, "<rect width=\"{size}\" height=\"{size}\" x=\"{x}\" y=\"{y}\" fill=\"black\"/>")
+            xx
+        xx
+    xx
+    :put_last!(parts, "</svg>")
+    return :join(parts, "")
+xx
+
+/// Run directly (goblin run --vm lib/qrcode.gbln) with QR_URL and QR_OUT
+/// set, this module writes that URL's SVG: how the web request renders one,
+/// since the VM engine is far quicker than the interpreter and cannot
+/// compile a module that imports another module's globals.
+qr_url | :env("QR_URL")
+if qr_url != nil and qr_url != ""
+    rendered | svg(qr_url)
+    if rendered == nil => rendered |= ""
+    :write_text!(:env("QR_OUT"), rendered)
+xx

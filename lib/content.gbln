@@ -584,7 +584,9 @@ xx
 
 act rich_text(c, m)
     body | m["body"]
-    if body == nil => body |= ""
+    /// A message with no rich text at all (an attachment posted by a bot)
+    /// renders as nothing, as ActionText::RichText#to_s does.
+    if body == nil => return ""
     root | parse(body)
     root |= remove_solo_unfurled(c, root, plain_text(m))
     root |= filter_tree(root)

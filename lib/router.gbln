@@ -22,6 +22,7 @@ import lib/controllers/pwa as pwa_ctl
 import lib/controllers/boosts as boosts
 import lib/controllers/bot_api as bot_api
 import lib/controllers/blobs as blobs
+import lib/controllers/qr_code as qr_code
 
 
 act not_found(c)
@@ -91,6 +92,7 @@ act dispatch(c)
     if n == 2 and s[0] == "join" and m == "POST" => return onboarding::create_user(c, s[1])
     if n == 3 and s[0] == "session" and s[1] == "transfers" and m == "GET" => return onboarding::transfer(c, s[2])
     if n == 3 and s[0] == "session" and s[1] == "transfers" and (m == "PUT" or m == "PATCH") => return onboarding::update_transfer(c, s[2])
+    if n == 2 and s[0] == "qr_code" and m == "GET" => return qr_code::show(c, s[1])
     if n == 1 and (s[0] == "webmanifest" or s[0] == "webmanifest.json") and m == "GET" => return pwa_ctl::manifest(c)
     if n == 1 and (s[0] == "service-worker" or s[0] == "service-worker.js") and m == "GET" => return pwa_ctl::service_worker(c)
 
