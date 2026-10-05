@@ -1,0 +1,43 @@
+/// lib/ojson.gbln
+/// JSON with Rails' key order and escaping. Goblin maps keep their keys
+/// sorted, so an object whose key order matters is written as
+/// ojson::object([[key, value], ...]) and encoded here.
+
+act object(pairs)
+    return {"__ordered_pairs": pairs}
+xx
+
+act encode_value(v)
+    if :is_array(v)
+        parts | []
+        for x in v
+            :put_last!(parts, encode_value(x))
+        xx
+        return "[" + :join(parts, ",") + "]"
+    xx
+    if :is_map(v)
+        if :has(v, "__ordered_pairs")
+            parts | []
+            for pair in v["__ordered_pairs"]
+                :put_last!(parts, :json_stringify(pair[0]) + ":" + encode_value(pair[1]))
+            xx
+            return "\{" + :join(parts, ",") + "}"
+        xx
+        parts | []
+        for k in :keys(v)
+            :put_last!(parts, :json_stringify(k) + ":" + encode_value(v[k]))
+        xx
+        return "\{" + :join(parts, ",") + "}"
+    xx
+    return :json_stringify(v)
+xx
+
+/// ActiveSupport's JSON encoding escapes <, > and & inside strings; outside
+/// strings JSON has none of the three.
+act encode(v)
+    s | encode_value(v)
+    :update_where!(s, "<", "\\u003c")
+    :update_where!(s, ">", "\\u003e")
+    :update_where!(s, "&", "\\u0026")
+    return s
+xx

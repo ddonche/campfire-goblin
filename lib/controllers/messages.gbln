@@ -3,6 +3,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/ojson as ojson
 import lib/html as html
 import lib/views/messages as message_views
 import lib/views/layout as layout
@@ -29,6 +30,30 @@ select json_build_object(
           or ($4 <> 0 and not exists (select 1 from messages where id = $4 and room_id = mb.room_id)))
 from memberships mb where mb.user_id = $1 and mb.room_id = $2
 """
+
+/// The bot API's page: PAGE_SQL's messages for a room already found, with
+/// the count and whether more lie beyond the page. $1 room, $2 before, $3 after.
+PAGE_SQL_FOR_API | """
+select json_build_object('messages', coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]'),
+  'total', (select count(*) from messages where room_id = $1),
+  'missing', ($2 <> 0 and not exists (select 1 from messages where id = $2 and room_id = $1))
+          or ($3 <> 0 and not exists (select 1 from messages where id = $3 and room_id = $1)),
+  'more_before', exists (select 1 from messages o where o.room_id = $1 and o.created_at < min(x.created_at)),
+  'more_after', exists (select 1 from messages o where o.room_id = $1 and o.created_at > max(x.created_at)))
+from (
+  select * from (select * from messages where room_id = $1 and $2 = 0 and $3 = 0 order by created_at desc, id desc limit 40) last_page
+  union all
+  select * from (select m.* from messages m, messages a where a.id = $2 and a.room_id = $1 and m.room_id = $1
+                 and m.created_at < a.created_at order by m.created_at desc, m.id desc limit 40) before_page
+  union all
+  select * from (select m.* from messages m, messages a where a.id = $3 and a.room_id = $1 and m.room_id = $1
+                 and m.created_at > a.created_at order by m.created_at, m.id limit 40) after_page
+) x
+"""
+
+act api_page(room_id, before, after)
+    return db::doc(PAGE_SQL_FOR_API, [room_id, before, after])
+xx
 
 act numeric(s)
     return :is_matching(s, "^[0-9]+$")
@@ -82,26 +107,34 @@ xx
 act create(c, room_id)
     req | c["req"]
     if numeric(room_id) == false => return room_not_found(c)
-    uid | c["user"]["id"]
-    room | db::one("select r.id, r.type from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [uid, :int(room_id)])
+    room | db::one("select r.id, r.type from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [c["user"]["id"], :int(room_id)])
     if room == nil => return room_not_found(c)
     body | nil
-    if http::has_param(req, "message[body]") => body |= content::canonicalize(http::param(req, "message[body]"))
+    if http::has_param(req, "message[body]") => body |= http::param(req, "message[body]")
+    m | post(c, room, body, http::param(req, "message[client_message_id]"))
+    return http::turbo_stream(cable::stream_tag("append", "messages_" + html::room_key(room), message_views::single(stream_context(c), m)) + "\n")
+xx
+
+/// Message creation with Message#broadcast_create: append to the room's
+/// message stream, then tell each member's unread-rooms stream. Returns
+/// the message.
+act post(c, room, raw_body, client_id)
+    body | nil
     plain | ""
-    if body != nil => plain |= content::plain_text(with_mentions(body))
-    created | db::doc("select campfire_create_message($1, $2, $3, $4, $5)", [uid, room["id"], body, http::param(req, "message[client_message_id]"), plain])
+    if raw_body != nil
+        body |= content::canonicalize(raw_body)
+        plain |= content::plain_text(with_mentions(body))
+    xx
+    created | db::doc("select campfire_create_message($1, $2, $3, $4, $5)", [c["user"]["id"], room["id"], body, client_id, plain])
     m | created["message"]
-    target | "messages_" + html::room_key(room)
-    /// broadcast_create: append to the room's message stream, then tell each
-    /// member's unread-rooms stream.
     stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [room["type"], room["id"]])
-    cable::broadcast(stream, cable::stream_tag("append", target, message_views::single(broadcast_context(c), m)))
+    cable::broadcast(stream, cable::stream_tag("append", "messages_" + html::room_key(room), message_views::single(broadcast_context(c), m)))
     streams | []
     for id in created["member_ids"]
         :put_last!(streams, "user_" + :str(id) + "_unreads")
     xx
     cable::broadcast_many(streams, {"roomId": room["id"]})
-    return http::turbo_stream(cable::stream_tag("append", target, message_views::single(stream_context(c), m)) + "\n")
+    return m
 xx
 
 /// A body with its mentioned users, for plain text ("@Name").
@@ -155,7 +188,11 @@ act update(c, room_id, id)
     room | {"id": m["room_id"], "type": found["room_type"]}
     stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [room["type"], room["id"]])
     cable::broadcast(stream, cable::stream_tag_with("maintain_scroll=\"true\"", "replace", message_views::dom(m, "presentation"), message_views::presentation(broadcast_context(c), m)))
-    if :has(req["accept"], "application/json") => return http::json(200, message_views::to_json(c, m))
+    if :has(req["accept"], "application/json")
+        res | http::response(200, ojson::encode(message_views::to_json(c, m)))
+        :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+        return res
+    xx
     return http::redirect(req, "/rooms/" + :str(m["room_id"]) + "/messages/" + :str(m["id"]))
 xx
 

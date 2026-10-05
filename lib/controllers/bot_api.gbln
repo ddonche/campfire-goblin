@@ -1,0 +1,170 @@
+/// lib/controllers/bot_api.gbln
+/// Messages::ByBotsController and Messages::Boosts::ByBotsController: the
+/// JSON API bots reach at /rooms/:room_id/:bot_key/messages.
+
+import lib/http as http
+import lib/db as db
+import lib/ojson as ojson
+import lib/cable as cable
+import lib/content as content
+import lib/views/messages as message_views
+import lib/controllers/messages as messages
+
+act json_response(status, value)
+    res | http::response(status, ojson::encode(value))
+    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    return res
+xx
+
+/// The exceptions app's JSON body for a RecordNotFound
+act json_not_found()
+    res | http::response(404, "\{\"status\":404,\"error\":\"Not Found\"}")
+    :update!(res["headers"]["Content-Type"], "application/json; charset=UTF-8")
+    return res
+xx
+
+/// Rails' `head`: the halting before_actions answer with text/html, the
+/// actions' own `head :created` with the JSON format's type. (A 204 still
+/// carries a Content-Type here: goblin-host always sends one; see GAPS.md.)
+act head_json(status)
+    res | http::response(status, "")
+    content_type | "text/html"
+    if status == 201 => content_type |= "application/json"
+    :update!(res["headers"]["Content-Type"], content_type)
+    return res
+xx
+
+act raw_body(c)
+    b | c["req"]["body"]
+    if b == nil => return ""
+    return b
+xx
+
+act blank(s)
+    return :trim(s) == ""
+xx
+
+/// set_room: Current.user.rooms.find_by(id: params[:room_id])
+act find_room(c, room_id)
+    if messages::numeric(room_id) == false => return nil
+    return db::one("select r.id, r.type from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [c["user"]["id"], :int(room_id)])
+xx
+
+/// GET /rooms/:room_id/:bot_key/messages?before=|after=
+act index(c, room_id, bot_key)
+    room | find_room(c, room_id)
+    if room == nil => return head_json(404)
+    req | c["req"]
+    before | messages::int_param(req, "before")
+    after | messages::int_param(req, "after")
+    if before < 0 or after < 0 => return json_not_found()
+    data | messages::api_page(room["id"], before, after)
+    if data["missing"] => return json_not_found()
+    list | []
+    for m in data["messages"]
+        :put_last!(list, message_views::to_json(c, m))
+    xx
+    res | json_response(200, list)
+    :update!(res["headers"]["X-Total-Count"], :str(data["total"]))
+    nxt | ""
+    n | :len(data["messages"])
+    if n > 0
+        if after > 0
+            if data["more_after"] => nxt |= "after=" + :str(data["messages"][n - 1]["id"])
+        else
+            if data["more_before"] => nxt |= "before=" + :str(data["messages"][0]["id"])
+        xx
+    xx
+    if nxt != ""
+        url | req["base"] + "/rooms/" + :str(room["id"]) + "/" + http::url_encode(bot_key) + "/messages?" + nxt
+        :update!(res["headers"]["Link"], "<" + url + ">; rel=\"next\"")
+    xx
+    return res
+xx
+
+/// POST /rooms/:room_id/:bot_key/messages -- the raw request body is the
+/// message (attachments: see GAPS.md)
+act create(c, room_id)
+    room | find_room(c, room_id)
+    if room == nil => return head_json(404)
+    body | raw_body(c)
+    if blank(body) and http::has_param(c["req"], "attachment") == false => return head_json(422)
+    m | messages::post(c, room, body, "")
+    res | head_json(201)
+    :update!(res["headers"]["Location"], c["req"]["base"] + "/messages/" + :str(m["id"]))
+    return res
+xx
+
+act find_message(c, room_id, id)
+    room | find_room(c, room_id)
+    if room == nil or messages::numeric(id) == false => return nil
+    return db::doc("select campfire_reachable_message($1, $2, $3, false)", [c["user"]["id"], :int(id), room["id"]])
+xx
+
+/// PATCH/PUT /rooms/:room_id/:bot_key/messages/:id
+act update(c, room_id, id)
+    if find_room(c, room_id) == nil => return head_json(404)
+    found | find_message(c, room_id, id)
+    if found == nil => return json_not_found()
+    m | found["message"]
+    if messages::can_administer(c, m) == false => return head_json(403)
+    body | content::canonicalize(raw_body(c))
+    m |= db::doc("select campfire_update_message($1, $2, $3)", [m["id"], body, content::plain_text(messages::with_mentions(body))])
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [found["room_type"], m["room_id"]])
+    cable::broadcast(stream, cable::stream_tag_with("maintain_scroll=\"true\"", "replace", message_views::dom(m, "presentation"), message_views::presentation(messages::broadcast_context(c), m)))
+    return json_response(200, message_views::to_json(c, m))
+xx
+
+/// DELETE /rooms/:room_id/:bot_key/messages/:id
+act destroy(c, room_id, id)
+    if find_room(c, room_id) == nil => return head_json(404)
+    found | find_message(c, room_id, id)
+    if found == nil => return json_not_found()
+    m | found["message"]
+    if messages::can_administer(c, m) == false => return head_json(403)
+    db::exec("select campfire_destroy_message($1)", [m["id"]])
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [found["room_type"], m["room_id"]])
+    cable::broadcast(stream, cable::stream_tag("remove", message_views::dom(m, ""), nil))
+    return head_json(204)
+xx
+
+/// messages/boosts/_boost.json
+act boost_json(c, b, m)
+    room_id | m["room_id"]
+    mid | m["id"]
+    return ojson::object([
+        ["id", b["id"]],
+        ["content", b["content"]],
+        ["created_at", message_views::json_time(b["created_iso"], b["created_epoch"])],
+        ["booster", message_views::user_json(c, b["booster"])],
+        ["message", ojson::object([["id", mid], ["url", c["req"]["base"] + "/rooms/{room_id}/messages/{mid}"]])]
+    ])
+xx
+
+/// POST /rooms/:room_id/:bot_key/messages/:message_id/boosts
+act create_boost(c, room_id, message_id)
+    found | find_message(c, room_id, message_id)
+    if found == nil => return head_json(404)
+    content_text | raw_body(c)
+    if blank(content_text) => return head_json(422)
+    m | found["message"]
+    b | db::doc("select campfire_create_boost($1, $2, $3)", [c["user"]["id"], m["id"], content_text])
+    sc | c
+    :update!(sc["csrf"], nil)
+    :update!(sc["user"], nil)
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [found["room_type"], m["room_id"]])
+    cable::broadcast(stream, cable::stream_tag_with("maintain_scroll=\"true\"", "append", "boosts_message_" + m["client_message_id"], message_views::boost(sc, b, m["id"])))
+    return json_response(201, boost_json(c, b, m))
+xx
+
+/// DELETE /rooms/:room_id/:bot_key/messages/:message_id/boosts/:id
+act destroy_boost(c, room_id, message_id, id)
+    found | find_message(c, room_id, message_id)
+    if found == nil or messages::numeric(id) == false => return head_json(404)
+    m | found["message"]
+    gone | db::value("delete from boosts where id = $1 and message_id = $2 and booster_id = $3 returning id", [:int(id), m["id"], c["user"]["id"]])
+    if gone == nil => return head_json(404)
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [found["room_type"], m["room_id"]])
+    cable::broadcast(stream, cable::stream_tag("remove", "boost_" + id, nil))
+    return head_json(204)
+xx

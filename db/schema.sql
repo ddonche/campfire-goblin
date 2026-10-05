@@ -550,6 +550,7 @@ BEGIN
   UPDATE messages SET updated_at = ts WHERE id = p_message;
   UPDATE rooms SET updated_at = ts WHERE id = (SELECT room_id FROM messages WHERE id = p_message);
   RETURN json_build_object('id', b.id, 'content', b.content,
+    'created_iso', campfire_iso(b.created_at), 'created_epoch', campfire_epoch(b.created_at),
     'booster', (SELECT campfire_user_json(u) FROM users u WHERE u.id = p_user));
 END $$;
 

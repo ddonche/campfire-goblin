@@ -20,6 +20,7 @@ import lib/controllers/files as files
 import lib/controllers/room_parts as room_parts
 import lib/controllers/pwa as pwa_ctl
 import lib/controllers/boosts as boosts
+import lib/controllers/bot_api as bot_api
 
 
 act not_found(c)
@@ -94,6 +95,15 @@ act dispatch(c)
 
     /// ---- everything else requires a signed-in user ----
     if auth::signed_in(c) == false => return request_authentication(c)
+    /// Messages::ByBotsController and Messages::Boosts::ByBotsController
+    if n >= 4 and s[0] == "rooms" and s[3] == "messages" and s[2] != "messages"
+        if n == 4 and m == "GET" => return bot_api::index(c, s[1], s[2])
+        if n == 4 and m == "POST" => return bot_api::create(c, s[1])
+        if n == 5 and (m == "PATCH" or m == "PUT") => return bot_api::update(c, s[1], s[4])
+        if n == 5 and m == "DELETE" => return bot_api::destroy(c, s[1], s[4])
+        if n == 6 and s[5] == "boosts" and m == "POST" => return bot_api::create_boost(c, s[1], s[4])
+        if n == 7 and s[5] == "boosts" and m == "DELETE" => return bot_api::destroy_boost(c, s[1], s[4], s[6])
+    xx
     bot | c["authenticated_by"] == "bot_key"
     if bot => return forbidden()
 

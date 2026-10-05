@@ -62,11 +62,23 @@ select json_build_object(
       and u.id::text = split_part($2, '-', 1) and u.bot_token = split_part($2, '-', 2)))
 """
 
+/// The :bot_key segment of /rooms/:room_id/:bot_key/messages[...], the
+/// one route with the key in its path.
+act path_bot_key(path)
+    parts | []
+    for seg in :split(path, "/")
+        if seg != "" => :put_last!(parts, seg)
+    xx
+    if :len(parts) >= 4 and parts[0] == "rooms" and parts[3] == "messages" and parts[2] != "messages" => return http::url_decode(parts[2])
+    return ""
+xx
+
 /// Builds the request context: request, account, signed-in user, CSRF token
 /// and the response cookies the request owes the browser.
 act context(req)
     token | http::cookie_of(req, SESSION_COOKIE)
-    bot_key | :trim(http::param(req, "bot_key"))
+    bot_key | :trim(path_bot_key(req["path"]))
+    if bot_key == "" => bot_key |= :trim(http::param(req, "bot_key"))
     data | db::doc(CONTEXT_SQL, [token, bot_key])
     csrf | http::cookie_of(req, CSRF_COOKIE)
     new_csrf | false
