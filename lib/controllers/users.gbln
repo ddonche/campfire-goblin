@@ -1,0 +1,241 @@
+/// lib/controllers/users.gbln
+/// UsersController#show, Users::BansController and Autocompletable::UsersController.
+
+import lib/http as http
+import lib/auth as auth
+import lib/db as db
+import lib/cable as cable
+import lib/content as content
+import lib/html as html
+import lib/views/layout as layout
+import lib/views/users as user_views
+import lib/views/messages as message_views
+import lib/controllers/room_parts as room_parts
+import lib/controllers/room_admin as room_admin
+import lib/views/room_forms as room_forms
+
+/// The user with a fresh transfer link: signed_id(purpose: :transfer,
+/// expires_in: 4.hours) under /session/transfers, and the link as
+/// link_to_zoom_qr_code encodes it (Base64.urlsafe_encode64, padded).
+USER_SHOW_SQL | """
+select json_build_object('user', campfire_user_json(u), 'transfer_url', t.url,
+  'qr_id', translate(encode(convert_to(t.url, 'UTF8'), 'base64'), E'+/\n', '-_'))
+from users u, lateral (select $2 || '/session/transfers/' || campfire_transfer_id(u.id) as url) t
+where u.id = $1
+"""
+
+AUTOCOMPLETE_PER_PAGE | 20
+
+/// $1 query ('' for all), $2 room id (0 for every user), $3 offset
+AUTOCOMPLETE_SQL | """
+select campfire_user_json(u)::jsonb || jsonb_build_object('sgid', campfire_user_sgid(u.id)) as u
+from users u
+where u.status = 0
+  and ($1 = '' or u.name ilike '%' || $1 || '%' escape '')
+  and ($2 = 0 or u.id in (select user_id from memberships where room_id = $2))
+order by lower(u.name), u.id
+limit 20 offset $3
+"""
+
+act numeric(s)
+    return :is_matching(:str(s), "^[0-9]+$")
+xx
+
+/// GET /users/:id
+act show(c, id)
+    if numeric(id) == false => return http::error_page(404)
+    data | db::doc(USER_SHOW_SQL, [:int(id), c["req"]["base"]])
+    if data == nil => return http::error_page(404)
+    p | layout::page(data["user"]["name"])
+    :update!(p["nav"], user_views::show_nav(c, data["user"]))
+    :update!(p["main"], user_views::show(c, data))
+    return http::html(layout::render(c, p))
+xx
+
+/// POST /users/:id/ban -- User#ban, with RemoveBannedContentJob's work done
+/// in the request.
+act ban(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    if numeric(id) == false => return http::error_page(404)
+    user | db::one("select id from users where id = $1", [:int(id)])
+    if user == nil => return http::error_page(404)
+    result | db::doc("campfire_ban_user($1)", [user["id"]])
+    /// bans.create! fails validation for a private or invalid address
+    if result == nil => return http::error_page(422)
+    for m in result["messages"]
+        cable::broadcast(m["stream"], cable::stream_tag("remove", "message_" + :str(m["id"]), nil))
+    xx
+    return http::redirect(c["req"], "/users/" + :str(user["id"]))
+xx
+
+/// DELETE /users/:id/ban
+act unban(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    if numeric(id) == false => return http::error_page(404)
+    user | db::one("select id from users where id = $1", [:int(id)])
+    if user == nil => return http::error_page(404)
+    db::exec("delete from bans where user_id = $1", [user["id"]])
+    db::exec("update users set status = 0, updated_at = utc_now() where id = $1", [user["id"]])
+    return http::redirect(c["req"], "/users/" + :str(user["id"]))
+xx
+
+/// GET /autocompletable/users -- <lexxy-prompt-item>s, or JSON
+act autocomplete(c)
+    req | c["req"]
+    q | :trim(http::param(req, "filter"))
+    if q == "" => q |= :trim(http::param(req, "query"))
+    room_id | 0
+    rid | http::param(req, "room_id")
+    if rid != ""
+        if numeric(rid) == false => return http::error_page(404)
+        mb | db::one("select room_id from memberships where user_id = $1 and room_id = $2", [c["user"]["id"], :int(rid)])
+        if mb == nil => return http::error_page(404)
+        room_id |= mb["room_id"]
+    xx
+    page | 1
+    pp | http::param(req, "page")
+    if numeric(pp) and :int(pp) > 0 => page |= :int(pp)
+    users | []
+    for row in db::all(AUTOCOMPLETE_SQL, [q, room_id, (page - 1) * AUTOCOMPLETE_PER_PAGE])
+        :put_last!(users, row["u"])
+    xx
+    if :has(req["accept"], "application/json")
+        items | []
+        for u in users
+            :put_last!(items, "\{\"name\":" + content::json_html(html::h(u["name"])) + ",\"value\":" + :str(u["id"]) + ",\"avatar_url\":" + :json_stringify(req["base"] + u["avatar"]) + ",\"sgid\":" + :json_stringify(u["sgid"]) + "}")
+        xx
+        res | http::response(200, "[" + :join(items, ",") + "]")
+        :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+        return res
+    xx
+    out | ""
+    for u in users
+        out |= out + user_views::prompt_item(u)
+    xx
+    return http::html(out + "\n")
+xx
+
+/// ---------- Users::ProfilesController ----------
+
+/// $1 the current user, $2 the base URL
+PROFILE_SQL | """
+select json_build_object('user', campfire_user_json(u), 'transfer_url', t.url,
+  'qr_id', translate(encode(convert_to(t.url, 'UTF8'), 'base64'), E'+/\n', '-_'),
+  'has_avatar', exists (select 1 from active_storage_attachments a where a.record_type = 'User' and a.name = 'avatar' and a.record_id = u.id),
+  'memberships', (select coalesce(json_agg(json_build_object('room_id', r.id, 'type', r.type, 'involvement', mb.involvement,
+      'room', campfire_room_json(r)) order by lower(r.name) nulls first, mb.id), '[]')
+    from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = u.id))
+from users u, lateral (select $2 || '/session/transfers/' || campfire_transfer_id(u.id) as url) t
+where u.id = $1
+"""
+
+/// GET /users/me/profile
+act profile(c)
+    data | db::doc(PROFILE_SQL, [c["user"]["id"], c["req"]["base"]])
+    shared | []
+    directs | []
+    for mb in data["memberships"]
+        :update!(mb["display_name"], message_views::room_name(mb["room"], c["user"]["id"]))
+        :update!(mb["button"], room_parts::involvement_button(c, mb, mb["involvement"]))
+        if mb["type"] == "Rooms::Direct"
+            :put_last!(directs, mb)
+        else
+            :put_last!(shared, mb)
+        xx
+    xx
+    p | layout::page(data["user"]["name"])
+    :update!(p["nav"], user_views::profile_nav(c))
+    :update!(p["main"], user_views::profile(c, data, shared, directs))
+    return http::html(layout::render(c, p))
+xx
+
+/// PATCH /users/me/profile -- user_params.compact: a field that is sent is
+/// updated, an empty password leaves the password alone.
+act update_profile(c)
+    req | c["req"]
+    fields | ["name", "email_address", "bio"]
+    any | false
+    uid | c["user"]["id"]
+    for f in fields
+        key | "user[" + f + "]"
+        if http::has_param(req, key)
+            any |= true
+            db::exec("update users set " + f + " = $2, updated_at = utc_now() where id = $1", [uid, http::param(req, key)])
+        xx
+    xx
+    if http::has_param(req, "user[password]")
+        any |= true
+        pw | http::param(req, "user[password]")
+        if pw != "" => db::exec("update users set password_digest = crypt($2, gen_salt('bf', 12)), updated_at = utc_now() where id = $1", [uid, pw])
+    xx
+    if any == false and http::has_param(req, "user[avatar]") == false => return http::head(400)
+    notice | "✓"
+    if http::has_param(req, "user[avatar]") and http::param(req, "user[avatar]") != "" => notice |= "It may take up to 30 minutes to change everywhere."
+    c |= auth::flash_next(c, "notice", notice)
+    return auth::keep(c, http::redirect(req, "/users/me/profile"))
+xx
+
+/// ---------- Users::PushSubscriptionsController ----------
+
+PUSH_HOSTS | ["jmt17.google.com", "fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com", "notify.windows.com"]
+
+/// GET /users/me/push_subscriptions
+act push_subscriptions(c)
+    subs | db::all("select id, endpoint, user_agent from push_subscriptions where user_id = $1 order by id", [c["user"]["id"]])
+    p | layout::page("Push notification subscriptions")
+    :update!(p["nav"], room_forms::back_nav(room_admin::last_room_id(c)))
+    :update!(p["main"], user_views::push_subscriptions(c, subs))
+    return http::html(layout::render(c, p))
+xx
+
+/// Push::Subscription#validate_endpoint_url, short of resolving the host
+/// (Goblin has no DNS lookup; see GAPS.md).
+act valid_push_endpoint(endpoint)
+    parts | html::matches(endpoint, "^https://([A-Za-z0-9.-]+)(:443)?(/[^\\s]*)?$")
+    if :len(parts) == 0 => return false
+    host | :lower(:split(:split(endpoint, "/")[2], ":")[0])
+    for permitted in PUSH_HOSTS
+        if host == permitted or :ends_with(host, "." + permitted) => return true
+    xx
+    return false
+xx
+
+/// POST /users/me/push_subscriptions (JSON from the notifications controller)
+act create_push_subscription(c)
+    req | c["req"]
+    sub | req["params"]["push_subscription"]
+    if sub == nil or :is_map(sub) == false => return http::head(400)
+    endpoint | nil
+    p256dh | nil
+    auth_key | nil
+    if :has(sub, "endpoint") => endpoint |= sub["endpoint"]
+    if :has(sub, "p256dh_key") => p256dh |= sub["p256dh_key"]
+    if :has(sub, "auth_key") => auth_key |= sub["auth_key"]
+    uid | c["user"]["id"]
+    existing | db::one("select id from push_subscriptions where user_id = $1 and endpoint is not distinct from $2 and p256dh_key is not distinct from $3 and auth_key is not distinct from $4", [uid, endpoint, p256dh, auth_key])
+    valid | endpoint != nil and endpoint != "" and valid_push_endpoint(endpoint)
+    if existing != nil
+        if valid == false => return http::head(422)
+        db::exec("update push_subscriptions set updated_at = utc_now() where id = $1", [existing["id"]])
+        return http::head(200)
+    xx
+    if valid == false => return http::head(422)
+    db::exec("insert into push_subscriptions (user_id, endpoint, p256dh_key, auth_key, user_agent, created_at, updated_at) values ($1, $2, $3, $4, $5, utc_now(), utc_now())", [uid, endpoint, p256dh, auth_key, req["user_agent"]])
+    return http::head(200)
+xx
+
+/// DELETE /users/me/push_subscriptions/:id
+act destroy_push_subscription(c, id)
+    if :is_matching(id, "^[0-9]+$") => db::exec("delete from push_subscriptions where user_id = $1 and id = $2", [c["user"]["id"], :int(id)])
+    return http::redirect(c["req"], "/users/me/push_subscriptions")
+xx
+
+/// POST /users/me/push_subscriptions/:id/test_notifications. Delivering a Web
+/// Push message needs an outbound HTTPS client, which Goblin lacks (GAPS.md),
+/// so the notification is not sent.
+act test_push_notification(c, id)
+    if :is_matching(id, "^[0-9]+$") == false => return http::error_page(404)
+    sub | db::one("select id from push_subscriptions where user_id = $1 and id = $2", [c["user"]["id"], :int(id)])
+    if sub == nil => return http::error_page(404)
+    return http::redirect(c["req"], "/users/me/push_subscriptions")
+xx

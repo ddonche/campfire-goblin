@@ -258,6 +258,7 @@ act request()
         "base": proto + "://" + host,
         "ip": ip,
         "turbo_frame": header("turbo-frame"),
+        "referrer": header("referer"),
         "xhr": header("x-requested-with") == "XMLHttpRequest"
     }
 xx

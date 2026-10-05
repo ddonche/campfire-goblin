@@ -639,3 +639,61 @@ BEGIN
   END LOOP;
   DELETE FROM rooms WHERE id = p_room;
 END $$;
+
+-- ---------- Users ----------
+-- User#transfer_id: signed_id(purpose: :transfer, expires_in: 4.hours)
+CREATE FUNCTION campfire_transfer_id(user_id bigint) RETURNS text LANGUAGE sql STABLE AS $$
+  SELECT campfire_sign('{"_rails":{"data":' || user_id || ',"exp":"'
+    || to_char(utc_now() + interval '4 hours', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') || '","pur":"user/transfer"}}', 'signed_id')
+$$;
+
+-- User.find_by_transfer_id: find_signed(id, purpose: :transfer), unexpired.
+CREATE FUNCTION campfire_user_from_transfer_id(token text) RETURNS bigint LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  payload json;
+BEGIN
+  payload := campfire_verify(token, 'signed_id')::json;
+  IF payload->'_rails'->>'pur' IS DISTINCT FROM 'user/transfer' THEN RETURN NULL; END IF;
+  IF (payload->'_rails'->>'exp')::timestamp < utc_now() THEN RETURN NULL; END IF;
+  RETURN (SELECT id FROM users WHERE id = (payload->'_rails'->>'data')::bigint);
+EXCEPTION WHEN others THEN
+  RETURN NULL;
+END $$;
+
+-- Ban#ip_address_is_public
+CREATE FUNCTION campfire_public_ip(ip text) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  a inet;
+BEGIN
+  a := ip::inet;
+  RETURN NOT (a << '127.0.0.0/8' OR a = '127.0.0.1' OR a = '::1' OR a << '10.0.0.0/8' OR a << '172.16.0.0/12'
+    OR a << '192.168.0.0/16' OR a << 'fc00::/7' OR a << '169.254.0.0/16' OR a << 'fe80::/10');
+EXCEPTION WHEN others THEN
+  RETURN false;
+END $$;
+
+-- User#ban: a ban per session IP, sessions dropped, status banned, and
+-- RemoveBannedContentJob's message removal. NULL when bans.create! would
+-- fail validation (a private or invalid address), changing nothing.
+CREATE FUNCTION campfire_ban_user(p_user bigint) RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  removed json;
+  mid bigint;
+BEGIN
+  IF EXISTS (SELECT 1 FROM sessions WHERE user_id = p_user AND coalesce(ip_address, '') <> '' AND NOT campfire_public_ip(ip_address)) THEN
+    RETURN NULL;
+  END IF;
+  INSERT INTO bans (user_id, ip_address, created_at, updated_at)
+  SELECT p_user, ip, utc_now(), utc_now() FROM (
+    SELECT DISTINCT ON (ip_address) ip_address AS ip, id FROM sessions WHERE user_id = p_user AND coalesce(ip_address, '') <> '' ORDER BY ip_address, id) s
+  ORDER BY s.id;
+  DELETE FROM sessions WHERE user_id = p_user;
+  UPDATE users SET status = 2, updated_at = utc_now() WHERE id = p_user;
+  SELECT coalesce(json_agg(json_build_object('id', m.client_message_id,
+    'stream', campfire_gid_param(r.type, r.id) || ':messages') ORDER BY m.id), '[]')
+  INTO removed FROM messages m JOIN rooms r ON r.id = m.room_id WHERE m.creator_id = p_user;
+  FOR mid IN SELECT id FROM messages WHERE creator_id = p_user LOOP
+    PERFORM campfire_destroy_message(mid);
+  END LOOP;
+  RETURN json_build_object('messages', removed);
+END $$;
