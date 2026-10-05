@@ -177,10 +177,17 @@ CREATE INDEX index_webhooks_on_user_id ON webhooks (user_id);
 
 -- Replacement for SQLite FTS5 "message_search_index" (body, tokenize=porter).
 -- rowid = message id, as in Campfire.
+-- FTS5's porter tokenizer stems but keeps stop words, so the search
+-- configuration is English stemming without the stop-word list.
+CREATE TEXT SEARCH DICTIONARY campfire_stem (TEMPLATE = snowball, LANGUAGE = english);
+CREATE TEXT SEARCH CONFIGURATION campfire (COPY = english);
+ALTER TEXT SEARCH CONFIGURATION campfire
+  ALTER MAPPING FOR asciiword, asciihword, hword_asciipart, word, hword, hword_part WITH campfire_stem;
+
 CREATE TABLE message_search_index (
   rowid bigint PRIMARY KEY,
   body text NOT NULL,
-  tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', body)) STORED
+  tsv tsvector GENERATED ALWAYS AS (to_tsvector('campfire', body)) STORED
 );
 CREATE INDEX index_message_search_index_on_tsv ON message_search_index USING gin (tsv);
 

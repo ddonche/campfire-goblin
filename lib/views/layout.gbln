@@ -68,6 +68,7 @@ xx
 act render(c, p)
     title | html::h(p["title"])
     csrf | c["csrf"]
+    if c["req"]["turbo_frame"] != "" => return render_frame(c, p)
     account | c["account"]
     v | account["v"]
     user_meta | ""
@@ -153,6 +154,24 @@ act render(c, p)
     <a href="https://once.com" id="app-logo" target="_blank" aria-label="Once software from 37signals home page">
       {logo}
     </a>
+  </body>
+</html>
+"""
+xx
+
+/// turbo-rails' layouts/turbo_rails/frame, used for Turbo-Frame requests.
+act render_frame(c, p)
+    csrf | c["csrf"]
+    head | p["head"]
+    main | p["main"]
+    return """<html>
+  <head>
+    <meta name="csrf-param" content="authenticity_token" />
+<meta name="csrf-token" content="{csrf}" />
+    {head}
+  </head>
+  <body>
+    {main}
   </body>
 </html>
 """

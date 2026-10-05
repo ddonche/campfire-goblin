@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# bin/signin [email] [password] -- signs in through bin/request and prints the session cookie
+email=${1:-david@37signals.com}; password=${2:-secret123456}
+r=$(bin/request GET /session/new 2>/dev/null)
+tok=$(echo "$r" | python3 -c 'import json,sys,re; print(re.search(r"csrf-token\" content=\"([^\"]+)",json.load(sys.stdin)["body"]).group(1))')
+enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$email")
+bin/request POST /session "_campfire_csrf=$tok" "email_address=$enc&password=$password&authenticity_token=$tok" 2>/dev/null |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["cookies"][0].split(";")[0])'

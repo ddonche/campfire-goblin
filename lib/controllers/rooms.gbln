@@ -79,7 +79,7 @@ xx
 act root(c)
     last | http::cookie_of(c["req"], "last_room")
     if last == "" or numeric(last) == false => last |= "0"
-    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by (r.id = $2) desc, r.created_at, r.id", [c["user"]["id"], :int(last)])
+    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by (r.id = $2) desc, r.created_at, mb.id", [c["user"]["id"], :int(last)])
     if room != nil => return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
     p | layout::page("No rooms yet")
     :update!(p["body_class"], "sidebar")

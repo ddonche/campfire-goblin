@@ -1,5 +1,49 @@
 /// lib/controllers/sidebars.gbln -- Users::SidebarsController
+
 import lib/http as http
+import lib/db as db
+import lib/views/layout as layout
+import lib/views/sidebar as sidebar_views
+
+DIRECT_PLACEHOLDERS | 20
+
+/// $1 is the current user. Directs come newest first; Ruby's sort_by then
+/// reverse flips ties, which the trailing keys reproduce.
+SIDEBAR_SQL | """
+with visible as (
+  select mb.id as membership_id, mb.unread_at, r.id as room_id, r.name, r.type, r.updated_at
+  from memberships mb join rooms r on r.id = mb.room_id
+  where mb.user_id = $1 and mb.involvement <> 'invisible'
+), excluded as (
+  select m.user_id from memberships m join rooms r on r.id = m.room_id
+  where r.type = 'Rooms::Direct' and r.id in (select room_id from memberships where user_id = $1)
+  union select $1
+)
+select json_build_object(
+  'rooms_stream', campfire_signed_stream('rooms'),
+  'user_stream', campfire_signed_stream(campfire_gid_param('User', $1) || ':rooms'),
+  'directs', (select coalesce(json_agg(json_build_object(
+      'unread', v.unread_at is not null,
+      'user', campfire_user_json(me),
+      'room', json_build_object('id', v.room_id, 'updated_epoch', campfire_epoch(v.updated_at),
+        'others', (select coalesce(json_agg(campfire_user_json(u) order by om.id), '[]')
+                   from memberships om join users u on u.id = om.user_id where om.room_id = v.room_id and om.user_id <> $1))
+    ) order by v.updated_at desc, lower(v.name) desc nulls first, v.membership_id desc), '[]')
+    from visible v, users me where me.id = $1 and v.type = 'Rooms::Direct'),
+  'others', (select coalesce(json_agg(json_build_object('unread', v.unread_at is not null,
+      'room', json_build_object('id', v.room_id, 'name', v.name, 'type', v.type))
+      order by lower(v.name), v.membership_id), '[]')
+    from visible v where v.type <> 'Rooms::Direct'),
+  'placeholders', (select coalesce(json_agg(campfire_user_json(u) order by u.created_at, u.id), '[]') from (
+      select * from users where status = 0 and id not in (select user_id from excluded)
+      order by created_at, id limit greatest($2 - (select count(*) from excluded), 0)) u)
+)
+"""
+
+/// GET /users/me/sidebar
 act show(c)
-    return http::text(501, "Not Implemented")
+    data | db::doc(SIDEBAR_SQL, [c["user"]["id"], DIRECT_PLACEHOLDERS])
+    p | layout::page("Campfire")
+    :update!(p["main"], sidebar_views::show(c, data))
+    return http::html(layout::render(c, p))
 xx

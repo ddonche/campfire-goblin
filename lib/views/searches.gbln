@@ -1,0 +1,99 @@
+/// lib/views/searches.gbln -- searches/index
+
+import lib/html as html
+import lib/http as http
+import lib/views/messages as message_views
+
+/// The recent-search links and the clear button, shared by nav and sidebar.
+act recent_links(c, searches)
+    out | ""
+    for s in searches
+        q | html::h(s["query"])
+        href | "/searches?q=" + html::h(http_query(s["query"]))
+        out |= out + "      <a class=\"align-center gap room btn txt-nowrap\" href=\"{href}\">\n        <span class=\"overflow-ellipsis\">“{q}”</span>\n</a>"
+    xx
+    out |= out + "\n"
+    if :len(searches) > 0
+        broom | html::img("broom.svg", "aria-hidden=\"true\" ", 0)
+        inner | "\n        {broom}\n        <span class=\"for-screen-reader\">Clear recent searches</span>\n"
+        base | c["req"]["base"]
+        out |= out + "      " + html::button_to(base + "/searches/clear", "delete", "", " class=\"btn searches__btn\" data-turbo-confirm=\"Are you sure you want to clear your recent searches?\"", inner, c["csrf"])
+    xx
+    return out
+xx
+
+/// Rails' to_query for a single value: CGI.escape (spaces become +).
+act http_query(s)
+    return :update_matching(http::url_encode(s), "%20", "+")
+xx
+
+act nav(c, query, count, searches)
+    out | ""
+    if query != nil
+        q | html::h(query)
+        out |= """    <div class="searches__query flex align-center gap pad-block-start-half">
+      <div class="btn btn--reversed btn--faux align-center gap txt-nowrap">
+        <span class="overflow-ellipsis">“{q}”</span>
+        <span class="flex-item-no-shrink">{count}</span>
+</div>    </div>
+"""
+    xx
+    links | recent_links(c, searches)
+    return out + "\n  <div class=\"searches__recents align-center gap pad-block-half overflow-y overflow-hide-scrollbar\">\n" + links + "  </div>\n"
+xx
+
+act sidebar(c, searches)
+    links | recent_links(c, searches)
+    return "  <div class=\"rooms position-relative flex flex-column gap overflow-y overflow-hide-scrollbar\">\n" + links + "  </div>\n"
+xx
+
+act main(c, messages)
+    icon | html::img("search.svg", "aria-hidden=\"true\" class=\"colorize--black translucent\" ", 0)
+    list | message_views::collection(c, messages)
+    return """
+
+
+<div id="message-area" class="message-area">
+  <div class="message-area--empty min-width center">
+    <figure class="center pad">
+      {icon}
+    </figure>
+  </div>
+
+  <div id="search-results" class="messages searches__results" data-controller="search-results" data-search-results-target="messages" data-search-results-me-class="message--me" data-search-results-threaded-class="message--threaded" data-search-results-mentioned-class="message--mentioned" data-search-results-formatted-class="message--formatted">
+    
+{list}</div></div>
+
+"""
+xx
+
+act footer(c, return_room_id, raw_q)
+    back | html::img("arrow-left.svg", "aria-hidden=\"true\" ", 0)
+    hint | html::img("search.svg", "aria-hidden=\"true\" class=\"composer__input-hint colorize--black\" style=\"view-transition-name: input-btn;\" ", 20)
+    remove | html::img("remove.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 14)
+    up | html::img("arrow-up.svg", "aria-hidden=\"true\" ", 0)
+    token | html::hidden_token(c["csrf"])
+    value | ""
+    if raw_q != nil => value |= "value=\"" + html::h(raw_q) + "\" "
+    return """  <div class="composer flex align-end gap">
+    <a class="btn flex-item-no-shrink margin-block-end" style="view-transition-name: input-switcher; --btn-border-radius: 0.5em" href="/rooms/{return_room_id}">
+      {back}
+      <span class="for-screen-reader">Exit search </span>
+</a>
+    <form class="margin-block flex-item-grow contain flex align-center gap" data-controller="form" data-action="keydown.esc-&gt;form#cancel" action="/searches" accept-charset="UTF-8" method="post">{token}
+      <div class="composer__input flex align-center flex-item-grow gap full-width input input--actor min-width">
+        {hint}
+
+        <input {value}class="searches__input input flex-item-grow" role="searchbox" aria-label="search" autofocus="autofocus" required="required" type="text" name="q" id="q" />
+
+        <a data-form-target="cancel" role="button" class="searches__reset" href="/searches">
+          {remove}
+          <span class="for-screen-reader">Clear search field</span>
+</a>
+        <button name="button" type="submit" class="btn btn--reversed flex-item-no-shrink txt-small" style="--btn-border-radius: 0.5em">
+          {up}
+          <span class="for-screen-reader">Search</span>
+</button>      </div>
+</form>  </div>
+"""
+xx

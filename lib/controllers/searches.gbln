@@ -1,11 +1,81 @@
 /// lib/controllers/searches.gbln -- SearchesController
+
 import lib/http as http
+import lib/db as db
+import lib/views/layout as layout
+import lib/views/searches as search_views
+
+/// Current.user.reachable_messages.search(query).last_page_of(100), the
+/// user's recent searches and the room to return to. $1 user, $2 query
+/// ('' for none), $3 the last_room cookie (0 for none).
+SEARCH_SQL | """
+select json_build_object(
+  'messages', (
+    select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from (
+      select m.* from messages m
+      join memberships mb on mb.room_id = m.room_id and mb.user_id = $1
+      join message_search_index idx on idx.rowid = m.id
+      where $2 <> '' and idx.tsv @@ plainto_tsquery('campfire', $2)
+      order by m.created_at desc, m.id desc limit 100) x),
+  'searches', (select coalesce(json_agg(json_build_object('query', s.query) order by s.updated_at desc, s.id desc), '[]')
+               from searches s where s.user_id = $1),
+  'return_room', (select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1
+                  order by (r.id = $3) desc, r.created_at, mb.id limit 1)
+)
+"""
+
+/// params[:q]&.gsub(/[^[:word:]]/, " ")
+act query(c)
+    req | c["req"]
+    if http::has_param(req, "q") == false => return nil
+    return :update_matching(http::param(req, "q"), "[^\\w]", " ")
+xx
+
+act present(q)
+    return q != nil and :trim(q) != ""
+xx
+
+/// GET /searches
 act index(c)
-    return http::text(501, "Not Implemented")
+    req | c["req"]
+    q | query(c)
+    if present(q) == false => q |= nil
+    last | http::cookie_of(req, "last_room")
+    if :is_matching(last, "^[0-9]+$") == false => last |= "0"
+    term | ""
+    if q != nil => term |= q
+    data | db::doc(SEARCH_SQL, [c["user"]["id"], term, :int(last)])
+    raw | nil
+    if http::has_param(req, "q") => raw |= http::param(req, "q")
+    p | layout::page("Search")
+    :update!(p["body_class"], "sidebar searches")
+    :update!(p["nav"], search_views::nav(c, q, :len(data["messages"]), data["searches"]))
+    :update!(p["sidebar"], search_views::sidebar(c, data["searches"]))
+    :update!(p["main"], search_views::main(c, data["messages"]))
+    :update!(p["footer"], search_views::footer(c, data["return_room"], raw))
+    return http::html(layout::render(c, p))
 xx
+
+/// POST /searches -- Search.record: find_or_create_by(query).touch, then
+/// keep only the ten most recent.
 act create(c)
-    return http::text(501, "Not Implemented")
+    q | query(c)
+    if q == nil => q |= ""
+    uid | c["user"]["id"]
+    db::exec("""
+with found as (
+  update searches set updated_at = utc_now() where user_id = $1 and query = $2 returning id
+)
+insert into searches (user_id, query, created_at, updated_at)
+select $1, $2, utc_now(), utc_now() where not exists (select 1 from found)
+""", [uid, q])
+    /// trim_recent_searches; a no-op unless a search was just created
+    db::exec("delete from searches where user_id = $1 and id not in (select id from searches where user_id = $1 order by updated_at desc, id desc limit 10)", [uid])
+    return http::redirect(c["req"], "/searches?q=" + search_views::http_query(q))
 xx
+
+/// DELETE /searches/clear
 act clear(c)
-    return http::text(501, "Not Implemented")
+    db::exec("delete from searches where user_id = $1", [c["user"]["id"]])
+    return http::redirect(c["req"], "/searches")
 xx
