@@ -321,8 +321,11 @@ act text(status, body)
     return res
 xx
 
+/// Rails' `head` for an HTML request
 act head(status)
-    return text(status, "")
+    res | response(status, "")
+    :update!(res["headers"]["Content-Type"], "text/html")
+    return res
 xx
 
 /// Rails' redirect_to: 302 to an absolute URL (303 after non-GET from Turbo).
