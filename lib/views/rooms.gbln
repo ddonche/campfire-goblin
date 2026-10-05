@@ -3,6 +3,7 @@
 /// rooms/involvements/_bell and accounts/_invite.
 
 import lib/html as html
+import lib/http as http
 import lib/platform as platform
 import lib/views/pwa as pwa
 import lib/views/messages as message_views
@@ -100,7 +101,7 @@ xx
 act invite(c)
     account | c["account"]
     url | c["req"]["base"] + "/join/" + account["join_code"]
-    qr_id | :update_matching(:update_matching(url, "\\+", "-"), "/", "_")
+    qr_id | http::urlsafe_b64(url)
     person | html::img("person-add.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
     qr | html::img("qr-code.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
     copy | html::img("copy-paste.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
@@ -109,8 +110,7 @@ act invite(c)
     regen | ""
     if c["user"]["role"] == 1
         token | c["csrf"]
-        regen |= """
-      <form class="button_to" method="post" action="/account/join_code"><button class="btn btn--regenerate" type="submit">
+        regen |= """      <form class="button_to" method="post" action="/account/join_code"><button class="btn btn--regenerate" type="submit">
         {refresh}
         <span class="for-screen-reader">Regenerate join link</span>
 </button><input type="hidden" name="authenticity_token" value="{token}" /></form>"""
@@ -137,8 +137,8 @@ act invite(c)
     <button class="btn" hidden="hidden" data-controller="web-share" data-action="web-share#share" data-web-share-url-value="{url}" data-web-share-text-value="Hit this link to join me in Campfire and start chatting." data-web-share-title-value="Link to join Campfire">
       <span class="for-screen-reader">Share join link</span>
       {share}
-</button>{regen}
-  </div>
+</button>
+{regen}  </div>
 </div>
 """
 xx

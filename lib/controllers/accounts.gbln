@@ -1,0 +1,250 @@
+/// lib/controllers/accounts.gbln
+/// AccountsController, Accounts::{Users,JoinCodes,CustomStyles,Logos,Bots}Controller
+/// and Accounts::Bots::KeysController.
+
+import lib/http as http
+import lib/auth as auth
+import lib/db as db
+import lib/views/layout as layout
+import lib/views/accounts as account_views
+import lib/views/room_forms as room_forms
+import lib/controllers/room_admin as room_admin
+
+ACCOUNT_USERS_PER_PAGE | 500
+
+/// account_users.ordered.without_bots: active and banned users for
+/// administrators, active ones for everyone else. $1 admin?, $2 offset.
+ACCOUNT_USERS_SQL | """
+select campfire_user_json(u)::jsonb as u from users u
+where u.role <> 2 and (u.status = 0 or ($1 and u.status = 2))
+order by lower(u.name), u.id
+limit 501 offset $2
+"""
+
+BOTS_SQL | """
+select campfire_user_json(u)::jsonb || jsonb_build_object('bot_key', u.id || '-' || u.bot_token,
+  'webhook_url', (select url from webhooks w where w.user_id = u.id order by w.id limit 1),
+  'rooms', (select coalesce(jsonb_agg(jsonb_build_object('id', r.id, 'name', r.name) order by lower(r.name), r.id), '[]')
+            from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = u.id and r.type <> 'Rooms::Direct')) as b
+from users u where u.role = 2 and u.status = 0 and ($1 = 0 or u.id = $1)
+order by lower(u.name), u.id
+"""
+
+act numeric(s)
+    return :is_matching(:str(s), "^[0-9]+$")
+xx
+
+act page_param(c)
+    pp | http::param(c["req"], "page")
+    if numeric(pp) and :int(pp) > 0 => return :int(pp)
+    return 1
+xx
+
+/// One page of account users, and the next page's number (nil on the last).
+act users_page(c, admin, page)
+    rows | db::all(ACCOUNT_USERS_SQL, [admin, (page - 1) * ACCOUNT_USERS_PER_PAGE])
+    users | []
+    nxt | nil
+    for row in rows
+        if :len(users) < ACCOUNT_USERS_PER_PAGE
+            :put_last!(users, row["u"])
+        else
+            nxt |= page + 1
+        xx
+    xx
+    return {"users": users, "next": nxt}
+xx
+
+/// GET /account/edit
+act edit(c)
+    admin | auth::is_admin(c)
+    pg | users_page(c, admin, page_param(c))
+    admins | []
+    members | []
+    for u in pg["users"]
+        if u["role"] == 1
+            :put_last!(admins, u)
+        else
+            :put_last!(members, u)
+        xx
+    xx
+    p | layout::page("Account settings")
+    :update!(p["nav"], account_views::edit_nav(c, room_admin::last_room_id(c)))
+    :update!(p["main"], account_views::edit(c, admins, members, pg["next"]))
+    :update!(p["footer"], account_views::footer())
+    return http::html(layout::render(c, p))
+xx
+
+/// PATCH/PUT /account -- name and settings (logo uploads: see GAPS.md)
+act update(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    req | c["req"]
+    aid | c["account"]["id"]
+    any | false
+    if http::has_param(req, "account[name]")
+        any |= true
+        db::exec("update accounts set name = $2, updated_at = utc_now() where id = $1", [aid, http::param(req, "account[name]")])
+    xx
+    key | "account[settings][restrict_room_creation_to_administrators]"
+    if http::has_param(req, key)
+        any |= true
+        value | http::param(req, key) == "true"
+        db::exec("update accounts set settings = jsonb_set(coalesce(settings, '{}')::jsonb, '{restrict_room_creation_to_administrators}', to_jsonb($2::boolean))::json, updated_at = utc_now() where id = $1", [aid, value])
+    xx
+    if any == false and http::has_param(req, "account[logo]") == false => return http::head(400)
+    c |= auth::flash_next(c, "notice", "✓")
+    return auth::keep(c, http::redirect(req, "/account/edit"))
+xx
+
+/// GET /account/users(.turbo_stream)?page= -- User.active.ordered.without_bots
+act users_index(c)
+    pg | users_page(c, false, page_param(c))
+    entries | ""
+    for u in pg["users"]
+        entries |= entries + account_views::account_user(c, u)
+    xx
+    body | "<turbo-stream action=\"replace\" target=\"next_page_container\"><template>" + entries + "</template></turbo-stream>\n\n"
+    if pg["next"] != nil
+        body |= body + "  <turbo-stream action=\"append\" target=\"account_users\"><template>" + account_views::next_page_container(pg["next"]) + "</template></turbo-stream>\n"
+    xx
+    return http::turbo_stream(body)
+xx
+
+/// PATCH /account/users/:id -- role changes
+act update_user(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    if numeric(id) == false => return http::error_page(404)
+    u | db::one("select id from users where status = 0 and id = $1", [:int(id)])
+    if u == nil => return http::error_page(404)
+    if http::has_param(c["req"], "user[role]") == false => return http::head(400)
+    role | 0
+    if http::param(c["req"], "user[role]") == "administrator" => role |= 1
+    db::exec("update users set role = $2, updated_at = utc_now() where id = $1 and role <> $2", [u["id"], role])
+    return http::redirect(c["req"], "/account/edit")
+xx
+
+/// DELETE /account/users/:id -- User#deactivate
+act destroy_user(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    if numeric(id) == false => return http::error_page(404)
+    u | db::one("select id from users where status = 0 and id = $1", [:int(id)])
+    if u == nil => return http::error_page(404)
+    db::exec("select campfire_deactivate_user($1)", [u["id"]])
+    return http::redirect(c["req"], "/account/edit")
+xx
+
+/// POST /account/join_code
+act reset_join_code(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    code | auth::alphanumeric(4) + "-" + auth::alphanumeric(4) + "-" + auth::alphanumeric(4)
+    db::exec("update accounts set join_code = $2, updated_at = utc_now() where id = $1", [c["account"]["id"], code])
+    return http::redirect(c["req"], "/account/edit")
+xx
+
+/// GET /account/custom_styles/edit
+act edit_custom_styles(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    p | layout::page("Custom styles")
+    :update!(p["nav"], "  <div class=\"flex-item-justify-start\">\n    " + room_forms::link_back_to("/account/edit") + "\n  </div>\n")
+    :update!(p["main"], account_views::custom_styles(c))
+    return http::html(layout::render(c, p))
+xx
+
+/// PATCH /account/custom_styles
+act update_custom_styles(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    if http::has_param(c["req"], "account[custom_styles]") == false => return http::head(400)
+    db::exec("update accounts set custom_styles = $2, updated_at = utc_now() where id = $1", [c["account"]["id"], http::param(c["req"], "account[custom_styles]")])
+    c |= auth::flash_next(c, "notice", "✓")
+    return auth::keep(c, http::redirect(c["req"], "/account/custom_styles/edit"))
+xx
+
+/// DELETE /account/logo
+act destroy_logo(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    db::exec("delete from active_storage_attachments where record_type = 'Account' and name = 'logo'", [])
+    db::exec("update accounts set updated_at = utc_now() where id = $1", [c["account"]["id"]])
+    return http::redirect(c["req"], "/account/edit")
+xx
+
+/// ---------- bots ----------
+
+act bots_page(c, title, back, main)
+    p | layout::page(title)
+    :update!(p["nav"], "  <div class=\"flex-item-justify-start\">\n    " + room_forms::link_back_to(back) + "\n  </div>\n")
+    :update!(p["main"], main)
+    return http::html(layout::render(c, p))
+xx
+
+act find_bot(id)
+    if numeric(id) == false => return nil
+    rows | db::all(BOTS_SQL, [:int(id)])
+    if :len(rows) == 0 => return nil
+    return rows[0]["b"]
+xx
+
+/// GET /account/bots
+act bots(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    list | []
+    for row in db::all(BOTS_SQL, [0])
+        :put_last!(list, row["b"])
+    xx
+    return bots_page(c, "Chat bots", "/account/edit", account_views::bots(c, list))
+xx
+
+act new_bot(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    return bots_page(c, "New chat bot", "/account/bots", account_views::bot_new(c))
+xx
+
+act edit_bot(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    b | find_bot(id)
+    if b == nil => return http::error_page(404)
+    return bots_page(c, "Edit bot", "/account/bots", account_views::bot_edit(c, b))
+xx
+
+/// POST /account/bots -- User.create_bot!
+act create_bot(c)
+    if auth::is_admin(c) == false => return http::head(403)
+    req | c["req"]
+    if http::has_param(req, "user[name]") == false => return http::head(400)
+    webhook | nil
+    if http::has_param(req, "user[webhook_url]") => webhook |= http::param(req, "user[webhook_url]")
+    db::exec("select campfire_create_bot($1, $2, $3)", [http::param(req, "user[name]"), auth::alphanumeric(12), webhook])
+    return http::redirect(req, "/account/bots")
+xx
+
+/// PATCH /account/bots/:id -- User#update_bot!
+act update_bot(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    b | find_bot(id)
+    if b == nil => return http::error_page(404)
+    req | c["req"]
+    url | ""
+    if http::has_param(req, "user[webhook_url]") => url |= http::param(req, "user[webhook_url]")
+    db::exec("select campfire_update_webhook($1, $2)", [b["id"], url])
+    if http::has_param(req, "user[name]")
+        db::exec("update users set name = $2, updated_at = utc_now() where id = $1 and name is distinct from $2", [b["id"], http::param(req, "user[name]")])
+    xx
+    return http::redirect(req, "/account/bots")
+xx
+
+/// DELETE /account/bots/:id -- User#deactivate
+act destroy_bot(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    b | find_bot(id)
+    if b == nil => return http::error_page(404)
+    db::exec("select campfire_deactivate_user($1)", [b["id"]])
+    return http::redirect(c["req"], "/account/bots")
+xx
+
+/// PUT /account/bots/:id/key -- User#reset_bot_key
+act reset_bot_key(c, id)
+    if auth::is_admin(c) == false => return http::head(403)
+    b | find_bot(id)
+    if b == nil => return http::error_page(404)
+    db::exec("update users set bot_token = $2, updated_at = utc_now() where id = $1", [b["id"], auth::alphanumeric(12)])
+    return http::redirect(c["req"], "/account/bots")
+xx

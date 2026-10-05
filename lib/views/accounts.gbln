@@ -1,0 +1,433 @@
+/// lib/views/accounts.gbln
+/// accounts/edit, accounts/users/_user, accounts/custom_styles/edit and
+/// accounts/bots/*.
+
+import lib/html as html
+import lib/views/rooms as room_views
+import lib/views/room_forms as room_forms
+
+act footer()
+    return "  <div class=\"txt-align-center center margin-block-double txt-subtle\">Campfire&trade; version <span class=\"version-badge\">0</span></div>\n"
+xx
+
+act edit_nav(c, back_room_id)
+    nav | room_forms::back_nav(back_room_id)
+    if c["user"]["role"] == 1
+        bot | html::img("bot.svg", "aria-hidden=\"true\" ", 20)
+        art | html::img("art.svg", "aria-hidden=\"true\" ", 20)
+        nav |= nav + """
+    <div class="flex align-center gap flex-item-justify-end">
+      <a class="btn" style="view-transition-name: chat-bots" href="/account/bots">
+        {bot}
+        <span class="for-screen-reader">Set up chat bots</span>
+</a>
+      <a class="btn" style="view-transition-name: custom-styles" href="/account/custom_styles/edit">
+        {art}
+        <span class="for-screen-reader">Custom styles</span>
+</a>    </div>
+"""
+    else
+        nav |= nav + "\n"
+    xx
+    return nav
+xx
+
+/// accounts/users/_user
+act account_user(c, u)
+    me | c["user"]
+    admin | me["role"] == 1
+    id | u["id"]
+    banned | ""
+    if u["status"] == 2 => banned |= "banned"
+    avatar | html::avatar_tag(u, "loading=\"lazy\" ")
+    name | html::h(u["name"])
+    out | """<li class="flex align-center gap margin-none {banned}">
+  <figure class="avatar flex-item-no-shrink" style="--avatar-size: 3.75ch;">
+    {avatar}
+  </figure>
+
+  <div class="min-width">
+    <div class="overflow-ellipsis fill-shade"><strong>{name}</strong></div>
+  </div>
+
+  <hr class="separator" aria-hidden="true">
+
+"""
+    if admin and u["status"] == 0
+        if u["role"] != 2
+            token | html::hidden_token(c["csrf"])
+            role | "Member"
+            if u["role"] == 1 => role |= "Administrator"
+            disabled | ""
+            if id == me["id"] => disabled |= " disabled=\"disabled\""
+            checked | ""
+            if u["role"] == 1 => checked |= " checked=\"checked\""
+            crown | html::img("crown.svg", "aria-hidden=\"true\" ", 20)
+            out |= out + """      <form data-controller="form" action="/account/users/{id}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+        <label class="btn txt-small flex-item-no-shrink" for="role_user_{id}">
+          <span class="for-screen-reader">Role: {role}</span>
+          {crown}
+          <input name="user[role]"{disabled} type="hidden" value="member" /><input data-action="form#submit" hidden="hidden" id="role_user_{id}"{disabled} type="checkbox" value="administrator"{checked} name="user[role]" />
+        </label>
+</form>
+"""
+        xx
+        if id != me["id"]
+            minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
+            out |= out + "      " + html::button_to("/account/users/{id}", "delete", "", " class=\"btn txt-small flex-item-no-shrink btn--negative\" data-turbo-confirm=\"Are you sure you want to permanently remove this person from the account? This can’t be undone.\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete {name}</span>\n", c["csrf"])
+        xx
+    xx
+    if id == me["id"]
+        pencil | html::img("pencil.svg", "aria-hidden=\"true\" ", 20)
+        out |= out + "    <a class=\"btn txt-small flex-item-no-shrink\" target=\"_top\" href=\"/users/me/profile\">\n      {pencil}\n      <span class=\"for-screen-reader\">My settings</span>\n</a>"
+    xx
+    return out + "</li>\n"
+xx
+
+/// accounts/users/_next_page_container
+act next_page_container(page)
+    return "<turbo-frame loading=\"lazy\" src=\"/account/users.turbo_stream?page={page}\" class=\"flex center\" id=\"next_page_container\">\n  <div class=\"spinner center\"></div>\n</turbo-frame>"
+xx
+
+act edit(c, admins, members, next_page)
+    me | c["user"]
+    account | c["account"]
+    aid | account["id"]
+    out | "\n\n<section class=\"panel txt-align-center flex flex-column gap\" style=\"view-transition-name: account-settings\">\n"
+    if me["role"] == 1
+        token | html::hidden_token(c["csrf"])
+        camera | html::img("camera.svg", "aria-hidden=\"true\" ", 20)
+        v | account["v"]
+        logo | html::img_src("/account/logo?v={v}", "role=\"presentation\" data-upload-preview-target=\"image\" ", 48)
+        file | "<input class=\"input\" accept=\"image/*\" data-action=\"upload-preview#previewImage change-&gt;form#submit\" type=\"file\" name=\"account[logo]\" id=\"account_logo\" />"
+        delete_logo | ""
+        if account["has_logo"]
+            minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
+            delete_logo |= "        " + html::button_to("/account/logo?v={v}", "delete", "", " class=\"btn btn--negative txt-small avatar__delete-btn\"", "\n          {minus}\n          <span class=\"for-screen-reader\">Delete logo</span>\n", c["csrf"])
+        xx
+        tr | html::translation_button("account_name")
+        name | html::h(account["name"])
+        check | html::img("check.svg", "aria-hidden=\"true\" ", 20)
+        crown | html::img("crown.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 18)
+        restricted | false
+        settings | account["settings"]
+        if settings != nil and :has(settings, "restrict_room_creation_to_administrators")
+            rv | settings["restrict_room_creation_to_administrators"]
+            restricted |= rv == true or rv == "true"
+        xx
+        blank8 | "        "
+        toggle | "true"
+        checked | ""
+        if restricted
+            toggle |= "false"
+            checked |= "checked"
+        xx
+        out |= out + """    <div class="align-center center avatar__form gap" data-controller="upload-preview">
+      <form class="txt--medium" data-controller="form" enctype="multipart/form-data" action="/account.{aid}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+        <label class="btn input--file">
+          {camera}
+          {file}
+          <span class="for-screen-reader">Upload logo</span>
+        </label>
+</form>
+      <form data-controller="form" enctype="multipart/form-data" action="/account.{aid}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+        <label class="btn avatar input--file account-logo txt-xx-large">
+          {logo}
+          {file}
+          <span class="for-screen-reader">Upload logo</span>
+        </label>
+</form>
+{delete_logo}    </div>
+
+    <form class="flex flex-column gap" data-controller="form" action="/account.{aid}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+      <div class="flex align-center gap">
+        {tr}
+
+        <label class="flex align-center gap flex-item-grow">
+          <input class="input txt-large" autocomplete="off" placeholder="Name this account" autofocus="autofocus" data-action="keydown.enter-&gt;form#submit" type="text" value="{name}" name="account[name]" id="account_name" />
+        </label>
+
+        <button name="button" type="submit" class="btn btn--reversed center">
+          {check}
+          <span class="for-screen-reader">Save changes</span>
+</button>      </div>
+</form>
+    <div class="margin-block-start pad-block pad-inline-double fill-shade border-radius">
+      <form class="flex align-center gap center" data-controller="form" action="/account.{aid}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="put" />{token}
+        <div class="flex-item-grow flex align-center gap txt-align-start">
+          {crown} Must be admin to create new rooms
+        </div>
+{blank8}
+          <input value="{toggle}" type="hidden" name="account[settings][restrict_room_creation_to_administrators]" id="account_settings_restrict_room_creation_to_administrators" />
+
+        <label class="switch">
+          <input type="checkbox"
+                class="switch__input"
+                {checked}
+                data-action="change->form#submit">
+          <span class="switch__btn round"></span>
+          <span class="for-screen-reader">
+            Must be admin to create new rooms
+          </span>
+        </label>
+
+</form>    </div>
+"""
+    else
+        logo_tag | html::account_logo_tag(account, "txt-xx-large center")
+        name | html::h(account["name"])
+        out |= out + "    {logo_tag}\n    <h1 class=\"flex-item-grow txt-x-large\">{name}</h1>\n"
+    xx
+    invite | room_views::invite(c)
+    out |= out + "\n  <div class=\"margin-block pad-inline pad-block-start fill-shade border-radius\">\n    {invite}\n\n    <hr class=\"margin-block separator full-width\" style=\"--border-style: solid\">\n\n    <menu class=\"flex flex-column gap margin-none pad\">\n      <turbo-frame id=\"account_users\">\n        "
+    for u in admins
+        out |= out + account_user(c, u)
+    xx
+    out |= out + "\n\n"
+    if :len(admins) > 0 and :len(members) > 0
+        out |= out + "          <hr class=\"separator full-width\" style=\"--border-style: solid\">\n"
+    xx
+    out |= out + "\n        "
+    for u in members
+        out |= out + account_user(c, u)
+    xx
+    out |= out + "\n        "
+    if next_page != nil => out |= out + next_page_container(next_page)
+    return out + "\n      </turbo-frame>\n    </menu>\n  </div>\n</section>\n\n"
+xx
+
+/// accounts/custom_styles/edit
+act custom_styles(c)
+    token | html::hidden_token(c["csrf"])
+    base | c["req"]["base"]
+    tr | html::translation_button("custom_styles")
+    alert | html::img("alert.svg", "class=\"flex-inline colorize--black\" aria-hidden=\"true\" ", 16)
+    styles | ""
+    if c["account"]["custom_styles"] != nil => styles |= html::h(c["account"]["custom_styles"])
+    check | html::img("check.svg", "aria-hidden=\"true\" ", 20)
+    return """
+
+<section class="panel panel--wide txt-align-center flex flex-column position-relative" style="view-transition-name: custom-styles">
+  <form class="flex flex-column gap" data-controller="form" data-action="keydown.ctrl+enter-&gt;form#submit keydown.meta+enter-&gt;form#submit" action="{base}/account/custom_styles" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+    <div class="panel__button">
+      {tr}
+    </div>
+
+    <div class="pad-inline-double margin-inline">
+      <h1 class="margin-none">Custom CSS</h1>
+      <p class="flex flex-wrap align-center justify-center gap margin-none-block-start" style="--column-gap: 0.5ch; --row-gap: 0">
+        <span>Add custom CSS styles.</span>
+        {alert}
+        <span>Use Caution: you could break things.</span>
+      </p>
+    </div>
+
+    <label class="flex align-start gap flex-item-grow">
+      <textarea class="input input--code txt--small" placeholder="Add CSS styles…" autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" rows="16" name="account[custom_styles]" id="account_custom_styles">
+{styles}</textarea>
+    </label>
+
+    <button name="button" type="submit" class="btn btn--reversed center txt-large">
+      {check}
+      <span class="for-screen-reader">Save changes</span>
+</button></form></section>
+"""
+xx
+
+/// ---------- accounts/bots ----------
+
+act copy_button(text, label)
+    v | html::h(text)
+    copy | html::img("copy-paste.svg", "aria-hidden=\"true\" ", 20)
+    return "<button class=\"btn\" data-controller=\"copy-to-clipboard\" data-action=\"copy-to-clipboard#copy\" data-copy-to-clipboard-success-class=\"btn--success\" data-copy-to-clipboard-content-value=\"{v}\">\n            {copy}\n            <span class=\"for-screen-reader\">{label}</span>\n</button>"
+xx
+
+/// accounts/bots/_bot
+act bot(c, b)
+    id | b["id"]
+    avatar | html::avatar_tag(b, "loading=\"lazy\" ")
+    name | html::h(b["name"])
+    pencil | html::img("pencil.svg", "aria-hidden=\"true\" ", 20)
+    rooms | ""
+    for r in b["rooms"]
+        rname | html::h(r["name"])
+        url | c["req"]["base"] + "/rooms/" + :str(r["id"]) + "/" + b["bot_key"] + "/messages"
+        text_line | "curl -d 'Hello!' " + url
+        upload_line | "curl -F \"attachment=@/path/to/file\" " + url
+        text_value | html::h(text_line)
+        upload_value | html::h(upload_line)
+        msg_img | html::img("messages-outlined.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+        att_img | html::img("attachment.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+        copy_text | copy_button(text_line, "Copy message command")
+        copy_upload | copy_button(upload_line, "Copy attachment command")
+        rooms |= rooms + """    <fieldset class="gap max-width pad border border-radius">
+      <legend class="min-width txt-align-start pad-inline">
+        <strong class="overflow-ellipsis">{rname}</strong>
+      </legend>
+
+      <div class="flex align-center gap">
+        {msg_img}
+
+        <div class="flex-item-grow">
+          <input type="text" class="input full-width fill-white" value="{text_value}" aria-label="curl command for posting messages" readonly>
+        </div>
+
+        <div class="txt-small">
+          {copy_text}        </div>
+      </div>
+
+      <div class="flex align-center gap">
+        {att_img}
+
+        <div class="flex-item-grow">
+          <input type="text" class="input full-width fill-white" value="{upload_value}" aria-label="curl command for posting attachments" readonly>
+        </div>
+
+        <div class="txt-small">
+          {copy_upload}        </div>
+      </div>
+    </fieldset>
+"""
+    xx
+    return """<li class="flex flex-column gap flush fill-shade border-radius pad-block pad-inline-double">
+  <div class="flex align-center gap">
+    <figure class="avatar flex-item--no-shrink" style="--avatar-size: 2.65em;">
+      {avatar}
+    </figure>
+
+    <div class="min-width">
+      <div class="overflow-ellipsis txt-large"><strong>{name}</strong></div>
+    </div>
+
+    <a class="btn flex-item-justify-end" style="view-transition-name: chat-bot-{id}" href="/account/bots/{id}/edit">
+      {pencil}
+      <span class="for-screen-reader">Edit {name}</span>
+</a>  </div>
+
+{rooms}</li>
+"""
+xx
+
+act bots(c, list)
+    tr | html::translation_button("chat_bots")
+    bot_img | html::img("bot.svg", "aria-hidden=\"true\" ", 20)
+    add | html::img("add.svg", "aria-hidden=\"true\" ", 20)
+    entries | ""
+    for b in list
+        entries |= entries + bot(c, b)
+    xx
+    return """
+
+<section class="panel panel--wide txt-align-center flex flex-column position-relative" style="view-transition-name: chat-bots">
+  <div class="flex align-center gap">
+    <div class="panel__button">
+      {tr}
+    </div>
+    <div class="pad-inline-double center">
+      <h1 class="margin-none">Chat bots</h1>
+      <p class="margin-none-block-start">With Chat bots, other sites and services can post updates directly to Campfire.</p>
+
+      <a class="btn btn--reversed txt-large" aria-label="Add a chat bot" href="/account/bots/new">
+        {bot_img}
+        {add}
+</a>    </div>
+  </div>
+
+  <div class="pad-inline pad-block-start ">
+    <menu class="flex flex-column gap margin-none pad">
+      {entries}
+    </menu>
+  </div>
+</section>
+"""
+xx
+
+/// accounts/bots/_form
+act bot_form(b)
+    camera | html::img("camera.svg", "aria-hidden=\"true\" ", 20)
+    avatar | html::img("default-bot-avatar.svg", "alt=\"Bot avatar\" data-upload-preview-target=\"image\" ", 48)
+    if b != nil and :has(b, "avatar_url") => avatar |= html::img_src(b["avatar_url"], "alt=\"Bot avatar\" data-upload-preview-target=\"image\" ", 48)
+    tr_name | html::translation_button("bot_name")
+    tr_url | html::translation_button("webhook_url")
+    name_value | ""
+    url_value | ""
+    if b != nil
+        nv | html::h(b["name"])
+        name_value |= " value=\"{nv}\""
+        if b["webhook_url"] != nil
+            uv | html::h(b["webhook_url"])
+            url_value |= " value=\"{uv}\""
+        xx
+    xx
+    bot_img | html::img("bot.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+    web_img | html::img("web.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
+    check | html::img("check.svg", "aria-hidden=\"true\" ", 20)
+    return """<h1 class="for-screen-reader">Chat Bot Setup</h1>
+<label class="align-center center avatar__form gap" data-controller="upload-preview">
+  <div class="btn input--file">
+    {camera}
+    <input class="input" accept="image/*" data-upload-preview-target="input" data-action="upload-preview#previewImage" type="file" name="user[avatar]" id="user_avatar" />
+    <span class="for-screen-reader">Upload bot avatar</span>
+  </div>
+
+  <div class="avatar input--file txt-xx-large" style="--avatar-size: var(--btn-size);">
+    {avatar}
+  </div>
+</label>
+
+<div class="flex align-center gap">
+  {tr_name}
+  <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+    <input class="input" autocomplete="name" placeholder="Name the bot" autofocus="autofocus" required="required" data-1p-ignore="true" type="text"{name_value} name="user[name]" id="user_name" />
+    {bot_img}
+  </label>
+</div>
+
+<div class="flex align-center gap">
+  {tr_url}
+  <label class="flex align-center gap flex-item-grow txt-large input input--actor">
+    <input class="input" placeholder="Webhook URL" type="url"{url_value} name="user[webhook_url]" id="user_webhook_url" />
+    {web_img}
+  </label>
+</div>
+
+<button class="btn btn--reversed center txt-large" type="submit">{check}<span class="for-screen-reader">Save changes</span></button>
+"""
+xx
+
+act bot_new(c)
+    token | html::hidden_token(c["csrf"])
+    form | bot_form(nil)
+    return """
+
+<section class="panel">
+  <form class="flex flex-column gap" enctype="multipart/form-data" action="/account/bots" accept-charset="UTF-8" method="post">{token}
+    {form}
+</form></section>
+"""
+xx
+
+act bot_edit(c, b)
+    id | b["id"]
+    token | html::hidden_token(c["csrf"])
+    form | bot_form(b)
+    trash | html::img("trash.svg", "aria-hidden=\"true\" ", 20)
+    bot_img | html::img("bot.svg", "aria-hidden=\"true\" ", 20)
+    refresh | html::img("refresh.svg", "aria-hidden=\"true\" ", 20)
+    key | html::img("key.svg", "aria-hidden=\"true\" ", 20)
+    delete | html::button_to("/account/bots/{id}", "delete", "", " class=\"btn txt--small btn--negative\" aria-label=\"Delete this chat bot\" data-turbo-confirm=\"Are you sure you want to permanently remove this bot from the account? This can’t be undone.\"", "\n      {trash}\n      {bot_img}\n", c["csrf"])
+    rekey | html::button_to("/account/bots/{id}/key", "put", "", " class=\"btn full-width txt--small btn--negative\" aria-label=\"Generate a new key\" data-turbo-confirm=\"Are you sure you want to change the bot key? All usage of this bot must be updated.\"", "\n      {refresh}\n      {key}\n", c["csrf"])
+    return """
+
+<section class="panel" style="view-transition-name: chat-bot-{id}">
+  <form class="flex flex-column gap" enctype="multipart/form-data" action="/account/bots/{id}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+    {form}
+</form>
+  <hr class="separator full-width margin-block-double">
+
+  <div class="flex align-center gap justify-space-between">
+    {delete}
+    {rekey}  </div>
+</section>
+"""
+xx

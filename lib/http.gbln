@@ -396,3 +396,59 @@ act emit(res)
     if res["body"] == "" => return " "
     return res["body"]
 xx
+
+/// ---------- base64 ----------
+
+B64 | ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "_"]
+
+/// The UTF-8 bytes of a string, as integers.
+act utf8_bytes(s)
+    out | []
+    for ch in :chars(s)
+        cp | :ord(:str(ch))
+        if cp < 128
+            :put_last!(out, cp)
+        elif cp < 2048
+            :put_last!(out, 192 + idiv(cp, 64))
+            :put_last!(out, 128 + imod(cp, 64))
+        elif cp < 65536
+            :put_last!(out, 224 + idiv(cp, 4096))
+            :put_last!(out, 128 + imod(idiv(cp, 64), 64))
+            :put_last!(out, 128 + imod(cp, 64))
+        else
+            :put_last!(out, 240 + idiv(cp, 262144))
+            :put_last!(out, 128 + imod(idiv(cp, 4096), 64))
+            :put_last!(out, 128 + imod(idiv(cp, 64), 64))
+            :put_last!(out, 128 + imod(cp, 64))
+        xx
+    xx
+    return out
+xx
+
+/// Base64.urlsafe_encode64(s), with padding.
+act urlsafe_b64(s)
+    bytes | utf8_bytes(s)
+    n | :len(bytes)
+    out | ""
+    i | 0
+    while i < n
+        b0 | bytes[i]
+        b1 | 0
+        b2 | 0
+        if i + 1 < n => b1 |= bytes[i + 1]
+        if i + 2 < n => b2 |= bytes[i + 2]
+        out |= out + B64[idiv(b0, 4)] + B64[imod(b0, 4) * 16 + idiv(b1, 16)]
+        if i + 1 < n
+            out |= out + B64[imod(b1, 16) * 4 + idiv(b2, 64)]
+        else
+            out |= out + "="
+        xx
+        if i + 2 < n
+            out |= out + B64[imod(b2, 64)]
+        else
+            out |= out + "="
+        xx
+        i |= i + 3
+    xx
+    return out
+xx

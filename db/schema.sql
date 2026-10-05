@@ -697,3 +697,50 @@ BEGIN
   END LOOP;
   RETURN json_build_object('messages', removed);
 END $$;
+
+-- ---------- Accounts ----------
+-- User#deactivate
+CREATE FUNCTION campfire_deactivate_user(p_user bigint) RETURNS void LANGUAGE sql AS $$
+  DELETE FROM memberships WHERE user_id = p_user AND room_id IN (SELECT id FROM rooms WHERE type <> 'Rooms::Direct');
+  DELETE FROM push_subscriptions WHERE user_id = p_user;
+  DELETE FROM searches WHERE user_id = p_user;
+  DELETE FROM sessions WHERE user_id = p_user;
+  UPDATE users SET status = 1, updated_at = utc_now(),
+    email_address = replace(email_address, '@', '-deactivated-' || gen_random_uuid() || '@')
+  WHERE id = p_user;
+$$;
+
+-- User#grant_membership_to_open_rooms (after_create_commit)
+CREATE FUNCTION campfire_grant_open_rooms(p_user bigint) RETURNS void LANGUAGE sql AS $$
+  INSERT INTO memberships (room_id, user_id, created_at, updated_at)
+  SELECT r.id, p_user, utc_now(), utc_now() FROM rooms r WHERE r.type = 'Rooms::Open' ORDER BY r.id
+  ON CONFLICT (room_id, user_id) DO NOTHING;
+$$;
+
+-- User.create_bot!
+CREATE FUNCTION campfire_create_bot(p_name text, p_token text, p_webhook text) RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+  uid bigint;
+BEGIN
+  INSERT INTO users (name, role, status, bot_token, created_at, updated_at)
+  VALUES (p_name, 2, 0, p_token, utc_now(), utc_now()) RETURNING id INTO uid;
+  IF p_webhook IS NOT NULL THEN
+    INSERT INTO webhooks (user_id, url, created_at, updated_at) VALUES (uid, p_webhook, utc_now(), utc_now());
+  END IF;
+  PERFORM campfire_grant_open_rooms(uid);
+  RETURN uid;
+END $$;
+
+-- User#update_webhook_url!: a present URL updates or creates the webhook,
+-- a blank one removes it.
+CREATE FUNCTION campfire_update_webhook(p_user bigint, p_url text) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF coalesce(btrim(p_url), '') <> '' THEN
+    UPDATE webhooks SET url = p_url, updated_at = CASE WHEN url IS DISTINCT FROM p_url THEN utc_now() ELSE updated_at END WHERE user_id = p_user;
+    IF NOT FOUND THEN
+      INSERT INTO webhooks (user_id, url, created_at, updated_at) VALUES (p_user, p_url, utc_now(), utc_now());
+    END IF;
+  ELSE
+    DELETE FROM webhooks WHERE user_id = p_user;
+  END IF;
+END $$;

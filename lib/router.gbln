@@ -10,6 +10,7 @@ import lib/controllers/sessions as sessions
 import lib/controllers/rooms as rooms
 import lib/controllers/room_admin as room_admin
 import lib/controllers/users as users_ctl
+import lib/controllers/accounts as accounts
 import lib/controllers/messages as messages
 import lib/controllers/sidebars as sidebars
 import lib/controllers/searches as searches
@@ -143,6 +144,28 @@ act dispatch(c)
     if n == 3 and s[0] == "users" and s[1] == "me" and s[2] == "sidebar" and m == "GET" => return sidebars::show(c)
     if n == 3 and s[0] == "users" and s[1] == "me" and s[2] == "profile" and m == "GET" => return users_ctl::profile(c)
     if n == 3 and s[0] == "users" and s[1] == "me" and s[2] == "profile" and (m == "PATCH" or m == "PUT") => return users_ctl::update_profile(c)
+    if n >= 1 and (s[0] == "account" or :starts_with(s[0], "account."))
+        if n == 1 and (m == "PATCH" or m == "PUT") => return accounts::update(c)
+        if n == 2 and s[1] == "edit" and m == "GET" => return accounts::edit(c)
+        if n == 2 and (s[1] == "users" or s[1] == "users.turbo_stream") and m == "GET" => return accounts::users_index(c)
+        if n == 3 and s[1] == "users" and (m == "PATCH" or m == "PUT") => return accounts::update_user(c, s[2])
+        if n == 3 and s[1] == "users" and m == "DELETE" => return accounts::destroy_user(c, s[2])
+        if n == 2 and s[1] == "join_code" and m == "POST" => return accounts::reset_join_code(c)
+        if n == 3 and s[1] == "custom_styles" and s[2] == "edit" and m == "GET" => return accounts::edit_custom_styles(c)
+        if n == 2 and s[1] == "custom_styles" and (m == "PATCH" or m == "PUT") => return accounts::update_custom_styles(c)
+        if n == 2 and s[1] == "logo" and m == "DELETE" => return accounts::destroy_logo(c)
+        if n >= 2 and s[1] == "bots"
+            if n == 2 and m == "GET" => return accounts::bots(c)
+            if n == 2 and m == "POST" => return accounts::create_bot(c)
+            if n == 3 and s[2] == "new" and m == "GET" => return accounts::new_bot(c)
+            if n == 4 and s[3] == "edit" and m == "GET" => return accounts::edit_bot(c, s[2])
+            if n == 3 and (m == "PATCH" or m == "PUT") => return accounts::update_bot(c, s[2])
+            if n == 3 and m == "DELETE" => return accounts::destroy_bot(c, s[2])
+            if n == 4 and s[3] == "key" and (m == "PATCH" or m == "PUT") => return accounts::reset_bot_key(c, s[2])
+        xx
+        return not_found(c)
+    xx
+
     if n >= 3 and s[0] == "users" and s[1] == "me" and s[2] == "push_subscriptions"
         if n == 3 and m == "GET" => return users_ctl::push_subscriptions(c)
         if n == 3 and m == "POST" => return users_ctl::create_push_subscription(c)
