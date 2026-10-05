@@ -5,7 +5,7 @@ import lib/html as html
 HEAD_ASSETS | :read_text("lib/head_assets.html")
 
 act page(title)
-    return {"title": title, "head": "", "nav": "", "main": "", "footer": "", "sidebar": "", "body_class": ""}
+    return {"title": title, "head": "", "nav": "", "main": "", "footer": "", "sidebar": "", "body_class": "", "frame_layout": true}
 xx
 
 act lightbox()
@@ -68,7 +68,8 @@ xx
 act render(c, p)
     title | html::h(p["title"])
     csrf | c["csrf"]
-    if c["req"]["turbo_frame"] != "" => return render_frame(c, p)
+    /// turbo-rails' frame layout, unless the controller names its own layout
+    if c["req"]["turbo_frame"] != "" and p["frame_layout"] => return render_frame(c, p)
     account | c["account"]
     v | account["v"]
     user_meta | ""

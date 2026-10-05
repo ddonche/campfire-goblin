@@ -293,6 +293,11 @@ act response(status, body)
     return {"status": status, "body": body, "headers": {"Content-Type": "text/html; charset=utf-8"}, "cookies": []}
 xx
 
+/// Rails' public/<status>.html error pages (404, 422, 500).
+act error_page(status)
+    return response(status, :read_text("public/" + :str(status) + ".html"))
+xx
+
 act html(body)
     return response(200, body)
 xx

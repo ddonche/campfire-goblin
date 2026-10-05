@@ -141,7 +141,12 @@ xx
 /// session cookie refreshed on each authenticated request (Rails'
 /// authenticated_as sets it on resume, too), and flash bookkeeping.
 act finish(c, res)
-    /// VersionHeaders
+    /// Rails' default security headers, then VersionHeaders
+    res |= http::add_header(res, "X-Frame-Options", "SAMEORIGIN")
+    res |= http::add_header(res, "X-XSS-Protection", "0")
+    res |= http::add_header(res, "X-Content-Type-Options", "nosniff")
+    res |= http::add_header(res, "X-Permitted-Cross-Domain-Policies", "none")
+    res |= http::add_header(res, "Referrer-Policy", "strict-origin-when-cross-origin")
     res |= http::add_header(res, "X-Version", "0")
     res |= http::add_header(res, "X-Rev", "")
     if c["new_csrf"]

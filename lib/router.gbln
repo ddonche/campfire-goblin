@@ -13,10 +13,13 @@ import lib/controllers/sidebars as sidebars
 import lib/controllers/searches as searches
 import lib/controllers/cable as cable_endpoint
 import lib/controllers/files as files
+import lib/controllers/room_parts as room_parts
+import lib/controllers/pwa as pwa_ctl
+import lib/controllers/boosts as boosts
 
 
 act not_found(c)
-    return http::text(404, "Not Found")
+    return http::error_page(404)
 xx
 
 act forbidden()
@@ -67,7 +70,7 @@ act dispatch(c)
     if platform::allowed(p) == false => return http::text(406, "Your browser is not supported. Please upgrade.")
 
     if m != "GET" and m != "HEAD"
-        if auth::verified_request(c) == false => return http::text(422, "The change you wanted was rejected.")
+        if auth::verified_request(c) == false => return http::error_page(422)
         banned | db::value("select count(*)::int as n from bans where ip_address = $1", [req["ip"]])
         if banned > 0 => return http::head(429)
     xx
@@ -76,6 +79,8 @@ act dispatch(c)
     if n == 2 and s[0] == "session" and s[1] == "new" and m == "GET" => return sessions::new(c)
     if n == 1 and s[0] == "session" and m == "POST" => return sessions::create(c)
     if n == 2 and s[0] == "account" and s[1] == "logo" and m == "GET" => return files::logo(c)
+    if n == 1 and (s[0] == "webmanifest" or s[0] == "webmanifest.json") and m == "GET" => return pwa_ctl::manifest(c)
+    if n == 1 and (s[0] == "service-worker" or s[0] == "service-worker.js") and m == "GET" => return pwa_ctl::service_worker(c)
 
     /// ---- everything else requires a signed-in user ----
     if auth::signed_in(c) == false => return request_authentication(c)
@@ -96,11 +101,25 @@ act dispatch(c)
             room_id | s[1]
             if n == 3 and m == "GET" => return messages::index(c, room_id)
             if n == 3 and m == "POST" => return messages::create(c, room_id)
+            if n == 4 and m == "GET" => return messages::show(c, room_id, s[3])
+            if n == 5 and m == "GET" and s[4] == "edit" => return messages::edit(c, room_id, s[3])
+            if n == 4 and (m == "PATCH" or m == "PUT") => return messages::update(c, room_id, s[3])
+            if n == 4 and m == "DELETE" => return messages::destroy(c, room_id, s[3])
         xx
+        if n == 3 and s[2] == "refresh" and m == "GET" => return room_parts::refresh(c, s[1])
+        if n == 3 and s[2] == "involvement" and m == "GET" => return room_parts::involvement(c, s[1])
+        if n == 3 and s[2] == "involvement" and (m == "PUT" or m == "PATCH") => return room_parts::update_involvement(c, s[1])
         return not_found(c)
     xx
 
     if n == 3 and s[0] == "users" and s[1] == "me" and s[2] == "sidebar" and m == "GET" => return sidebars::show(c)
+
+    if s[0] == "messages" and n >= 3 and s[2] == "boosts"
+        if n == 3 and m == "GET" => return boosts::index(c, s[1])
+        if n == 3 and m == "POST" => return boosts::create(c, s[1])
+        if n == 4 and s[3] == "new" and m == "GET" => return boosts::new(c, s[1])
+        if n == 4 and m == "DELETE" => return boosts::destroy(c, s[1], s[3])
+    xx
 
     if s[0] == "searches"
         if n == 1 and m == "GET" => return searches::index(c)

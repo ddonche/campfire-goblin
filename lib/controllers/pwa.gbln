@@ -1,0 +1,41 @@
+/// lib/controllers/pwa.gbln -- PwaController (no authentication, no CSRF)
+
+import lib/http as http
+import lib/html as html
+
+/// GET /service-worker(.js)
+act service_worker(c)
+    res | http::response(200, :read_text("lib/templates/service_worker.js"))
+    :update!(res["headers"]["Content-Type"], "text/javascript; charset=utf-8")
+    return res
+xx
+
+/// GET /webmanifest(.json) -- pwa/manifest.json.erb, which escapes its
+/// interpolations as HTML (hence &amp; in the logo URL).
+act manifest(c)
+    account | c["account"]
+    name | "Campfire"
+    v | ""
+    if account != nil
+        name |= account["name"]
+        v |= account["v"]
+    xx
+    name |= html::h(name)
+    base | c["req"]["base"]
+    add | base + html::asset("add.svg")
+    person | base + html::asset("person.svg")
+    chat | base + html::asset("screenshots/android-chat.png")
+    sidebar | base + html::asset("screenshots/android-sidebar.png")
+    dark | base + html::asset("screenshots/android-dark-mode.png")
+    body | :read_text("lib/templates/manifest.json")
+    body |= :update_matching(body, "@NAME@", name)
+    body |= :update_matching(body, "@V@", v)
+    body |= :update_matching(body, "@ADD@", add)
+    body |= :update_matching(body, "@PERSON@", person)
+    body |= :update_matching(body, "@CHAT@", chat)
+    body |= :update_matching(body, "@SIDEBAR@", sidebar)
+    body |= :update_matching(body, "@DARK@", dark)
+    res | http::response(200, body)
+    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    return res
+xx

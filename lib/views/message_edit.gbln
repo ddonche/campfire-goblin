@@ -1,0 +1,101 @@
+/// lib/views/message_edit.gbln -- messages/edit
+
+import lib/html as html
+import lib/content as content
+
+act edit(c, m, users)
+    edit | "edit_" + "message_" + m["client_message_id"]
+    form_id | "form_message_" + m["client_message_id"]
+    delete_id | "delete_form_message_" + m["client_message_id"]
+    id | m["id"]
+    room_id | m["room_id"]
+    url | "/rooms/{room_id}/messages/{id}"
+    token | html::hidden_token(c["csrf"])
+    trash | html::img("trash.svg", "aria-hidden=\"true\" ", 0)
+    remove | html::img("remove.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 0)
+    inner | ""
+    if m["attachment"] != nil
+        pres | content::attachment(c, m, m["attachment"])
+        inner |= """        {pres}
+
+        <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
+          <button name="button" type="submit" class="btn btn--negative center margin-block-end" form="{delete_id}" data-turbo-confirm="Are you sure you want to delete this message?">
+            {trash}
+            <span class="for-screen-reader">Delete message</span>
+</button>        </div>
+"""
+    else
+        base | c["req"]["base"]
+        value | html::h(content::editable_body(c, m["body"], users))
+        check | html::img("check.svg", "aria-hidden=\"true\" ", 0)
+        cid | m["client_message_id"]
+        inner |= """        <div class="composer--edit composer--rich-text">
+          <form id="{form_id}" data-controller="form" data-action="lexxy:file-accept-&gt;form#preventAttachment keydown.esc-&gt;form#cancel keydown.ctrl+enter-&gt;form#submit:prevent keydown.meta+enter-&gt;form#submit:prevent" action="{url}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
+            <div class="full-width input input--actor min-width fill-white">
+              <lexxy-editor rows="1" class="input lexxy-content" aria-multiline="true" aria-label="Edit message" autofocus="autofocus" permitted-attachment-types="application/vnd.campfire.mention application/vnd.actiontext.opengraph-embed" data-action="lexxy:change-&gt;typing-notifications#start keydown-&gt;composer#submitByKeyboard:capture" data-direct-upload-url="{base}/rails/active_storage/direct_uploads" data-blob-url-template="{base}/rails/active_storage/blobs/redirect/:signed_id/:filename" id="message_body" input="message_body_trix_input_message_{cid}" name="message[body]" value="{value}">
+                <lexxy-prompt trigger="@" name="mention" src="/autocompletable/users?room_id={room_id}" remote-filtering="true" empty-results="No matches"></lexxy-prompt>
+</lexxy-editor>            </div>
+
+            <a data-form-target="cancel" hidden="hidden" href="{url}">Close editor and discard changes</a>
+
+            <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
+              <button name="button" type="submit" class="btn btn--reversed">
+                {check}
+                <span class="for-screen-reader">Save changes</span>
+</button>
+              <button name="button" type="submit" class="btn btn--negative" form="{delete_id}" data-turbo-confirm="Are you sure you want to delete this message?">
+                {trash}
+                <span class="for-screen-reader">Delete message</span>
+</button>            </div>
+</form>        </div>
+"""
+    xx
+    return """<turbo-frame id="{edit}">
+  <div class="message__body position-relative" data-controller="scroll-into-view">
+    <div class="message__body-content message__body-content--editing gap">
+{inner}    </div>
+
+    <div class="message__actions flex flex-wrap">
+      <a class="message__action-btn message__edit-close-btn txt-small btn btn--borderless" href="{url}">
+        {remove}
+        <span class="for-screen-reader">Close editor and discard changes</span>
+</a>    </div>
+
+    <form id="{delete_id}" data-turbo-frame="{edit}" action="{url}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="delete" />{token}
+  </div>
+</turbo-frame>
+"""
+xx
+
+/// messages/boosts/new
+act new_boost(c, m)
+    cid | m["client_message_id"]
+    id | m["id"]
+    token | html::hidden_token(c["csrf"])
+    u | c["user"]
+    avatar | html::avatar_tag(u, "")
+    name | html::h(u["name"])
+    check | html::img("check.svg", "aria-hidden=\"true\" ", 0)
+    minus | html::img("minus.svg", "aria-hidden=\"true\" ", 0)
+    return """<turbo-frame id="new_boost_message_{cid}">
+  <div class="boost flex-inline postion--relative max-width fill-white" style="--column-gap: var(--inline-space-half)">
+    <form class="boost__form flex align-center gap expanded" data-controller="form scroll-into-view" data-turbo-frame="boosting_message_{cid}" data-action="keydown.esc-&gt;form#cancel" action="/messages/{id}/boosts" accept-charset="UTF-8" method="post">{token}
+      <label class="boost__form-label flex gap" style="--column-gap: 0.7ch;" role="button" tabindex="0" aria-label="Add a boost">
+        <figure class="avatar boost__avatar flex-item-no-shrink">
+          {avatar}
+          <span class="for-screen-reader">{name}</span>
+        </figure>
+
+        <input autofocus="autofocus" autocomplete="off" autocorrect="off" maxlength="16" required="required" pattern="\\S+.*" data-boost-form-target="input" class="input input--boost txt-small" size="16" type="text" name="boost[content]" />
+      </label>
+
+      <button name="button" type="submit" class="btn btn--reversed">
+        {check}
+        <span class="for-screen-reader">Submit</span>
+</button>
+      <a data-turbo-frame="boosts_message_{cid}" data-form-target="cancel" class="btn btn--negative" href="/messages/{id}/boosts">
+        {minus}
+        <span class="for-screen-reader">Cancel</span>
+</a></form>  </div>
+</turbo-frame>"""
+xx

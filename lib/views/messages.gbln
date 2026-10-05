@@ -279,3 +279,35 @@ act single(c, m)
     if :ends_with(out, "\n") => out |= html::chop(out, 1)
     return "\n" + out
 xx
+
+ROLE_NAMES | ["member", "administrator", "bot"]
+
+/// Time#utc as JSON: ISO 8601 with milliseconds
+act json_time(iso, epoch_ms)
+    ms | :str(epoch_ms - (epoch_ms // 1000) * 1000)
+    ms |= :int(ms)
+    pad | :str(ms)
+    while :len(pad) < 3
+        pad |= "0" + pad
+    xx
+    return html::chop(iso, 1) + "." + pad + "Z"
+xx
+
+/// users/_user.json
+act user_json(c, u)
+    return {"id": u["id"], "name": u["name"], "role": ROLE_NAMES[u["role"]], "avatar_url": c["req"]["base"] + u["avatar"]}
+xx
+
+/// messages/_message.json
+act to_json(c, m)
+    room_id | m["room_id"]
+    id | m["id"]
+    return {
+        "id": id,
+        "created_at": json_time(m["created_iso"], m["created_epoch"]),
+        "body": {"plain_text": content::plain_text_body(m), "html": content::rich_text(c, m)},
+        "creator": user_json(c, m["creator"]),
+        "room": {"id": room_id},
+        "url": c["req"]["base"] + "/rooms/{room_id}/messages/{id}"
+    }
+xx

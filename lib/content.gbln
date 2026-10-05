@@ -551,12 +551,27 @@ act plain_text(m)
     body | m["body"]
     if body == nil => return ""
     t | body
+    /// attachable_plain_text_representation: mentions read as "@Name"
+    if :has(t, "action-text-attachment") and :has(m, "mentions") and m["mentions"] != nil
+        users | m["mentions"]
+        for sgid in :keys(users)
+            t |= :update_matching(t, "<action-text-attachment[^>]*sgid=\"" + sgid + "\"[^>]*>(</action-text-attachment>)?", "@" + users[sgid]["name"])
+        xx
+    xx
     if :has(t, "<")
         t |= :update_matching(t, "(?i)<br\\s*/?>", "\n")
         t |= :update_matching(t, "(?i)</(p|div|li|h[1-6]|blockquote|pre)>", "\n")
         t |= :update_matching(t, "<[^>]*>", "")
     xx
     t |= :trim(decode_entities(t))
+    return t
+xx
+
+/// Message#plain_text_body: the body's plain text, else the attachment's
+/// filename.
+act plain_text_body(m)
+    t | plain_text(m)
+    if t == "" and m["attachment"] != nil => return m["attachment"]["filename"]
     return t
 xx
 
@@ -636,4 +651,57 @@ xx
 act canonicalize(html)
     if :has(html, "action-text-attachment") == false => return html
     return serialize(canonical_tree(parse(html)))
+xx
+
+/// ---------- editing ----------
+
+/// Rails' JSON encoding of a string for HTML contexts (<, > and & escaped).
+act json_html(s)
+    t | :json_stringify(s)
+    :update_where!(t, "<", "\\u003c")
+    :update_where!(t, ">", "\\u003e")
+    :update_where!(t, "&", "\\u0026")
+    return t
+xx
+
+/// RichTextHelper#editable_body, serialized as the editor's value
+/// (to_trix_html): each attachment is rebuilt from its attachable, its
+/// rendered partial carried JSON-encoded in a content attribute.
+/// `users` maps stored sgids to users (with a fresh "sgid").
+act editable_tree(c, node, users)
+    kept | []
+    for k in node["kids"]
+        if k["t"] == "el" and k["name"] == "action-text-attachment"
+            sgid | attr_value(k["attrs"], "sgid")
+            user | nil
+            if sgid != nil and users != nil and :has(users, sgid) => user |= users[sgid]
+            if user != nil
+                partial | "<span class=\"mention\" sgid=\"" + user["sgid"] + "\">" + html::avatar_tag(user, "") + " " + html::h(user["name"]) + "</span>"
+                attrs | []
+                has_type | false
+                for a in k["attrs"]
+                    if a[0] == "content-type"
+                        :put_last!(attrs, ["content-type", MENTION_TYPE])
+                        has_type |= true
+                    elif a[0] != "content"
+                        :put_last!(attrs, a)
+                    xx
+                xx
+                if has_type == false => :put_last!(attrs, ["content-type", MENTION_TYPE])
+                :put_last!(attrs, ["content", json_html(partial)])
+                :update!(k["attrs"], attrs)
+            xx
+            :update!(k["kids"], [])
+        elif k["t"] == "el"
+            k |= editable_tree(c, k, users)
+        xx
+        :put_last!(kept, k)
+    xx
+    :update!(node["kids"], kept)
+    return node
+xx
+
+act editable_body(c, body, users)
+    if body == nil => return ""
+    return serialize(editable_tree(c, parse(body), users))
 xx

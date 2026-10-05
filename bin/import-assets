@@ -24,7 +24,16 @@ FileUtils.rm_rf(dst)
 FileUtils.cp_r(src, dst)
 manifest = JSON.parse(File.read(File.join(src, ".manifest.json")))
 
-# The polling stand-in for WebSocket (see public/cable/README in GAPS.md).
+# Rails serves these from public/ as well: error pages and robots.txt.
+%w[ 404.html 422.html 500.html 502.html robots.txt ].each do |name|
+  FileUtils.cp(File.join(campfire, "public", name), File.join(root, "public", name))
+end
+
+# PWA files rendered by PwaController, kept as templates.
+FileUtils.mkdir_p(File.join(root, "lib/templates"))
+FileUtils.cp(File.join(campfire, "app/views/pwa/service_worker.js"), File.join(root, "lib/templates/service_worker.js"))
+
+# The polling stand-in for WebSocket (see GAPS.md).
 shim_src = File.join(root, "cable/goblin_cable.js")
 shim = File.read(shim_src)
 shim_name = "goblin_cable-#{Digest::SHA256.hexdigest(shim)[0, 8]}.js"

@@ -1,0 +1,114 @@
+/// lib/controllers/room_parts.gbln -- Rooms::RefreshesController and
+/// Rooms::InvolvementsController (both RoomScoped).
+
+import lib/http as http
+import lib/db as db
+import lib/html as html
+import lib/cable as cable
+import lib/views/layout as layout
+import lib/views/messages as message_views
+import lib/views/sidebar as sidebar_views
+
+/// RoomScoped: Current.user.memberships.find_by!(room_id:)
+act membership(c, room_id)
+    if :is_matching(room_id, "^[0-9]+$") == false => return nil
+    return db::one("select mb.id, mb.involvement, r.id as room_id, r.type, r.name from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and mb.room_id = $2", [c["user"]["id"], :int(room_id)])
+xx
+
+/// page_created_since (first 40 after) and page_updated_since (last 40
+/// updated after, other than those) for $2 = since in milliseconds.
+REFRESH_SQL | """
+with since as (select to_timestamp($2 / 1000.0) at time zone 'utc' as t),
+created as (
+  select m.* from messages m, since where m.room_id = $1 and m.created_at > since.t
+  order by m.created_at, m.id limit 40
+), updated as (
+  select * from (
+    select m.* from messages m, since where m.room_id = $1 and m.updated_at > since.t
+      and m.id not in (select id from created)
+    order by m.created_at desc, m.id desc limit 40) u
+)
+select json_build_object(
+  'created', (select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from created x),
+  'updated', (select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from updated x))
+"""
+
+/// GET /rooms/:room_id/refresh?since=<ms>
+act refresh(c, room_id)
+    mb | membership(c, room_id)
+    if mb == nil => return http::error_page(404)
+    since | http::param(c["req"], "since")
+    if :is_matching(since, "^-?[0-9]+$") == false => since |= "0"
+    data | db::doc(REFRESH_SQL, [mb["room_id"], :int(since)])
+    sc | c
+    :update!(sc["csrf"], nil)
+    out | ""
+    if :len(data["created"]) > 0
+        list | ""
+        for m in data["created"]
+            list |= list + message_views::single(sc, m)
+        xx
+        out |= cable::stream_tag("append", "messages_" + html::room_key({"id": mb["room_id"], "type": mb["type"]}), "\n  " + list + "\n") + "\n"
+    xx
+    for m in data["updated"]
+        out |= out + cable::stream_tag("replace", message_views::dom(m, ""), message_views::single(sc, m)) + "\n"
+    xx
+    return http::turbo_stream(out)
+xx
+
+HUMANIZE_INVOLVEMENT | {"mentions": "Notifying about @ mentions", "everything": "Notifying about all messages", "nothing": "Notifications are off", "invisible": "Notifications are off and room invisible in sidebar"}
+
+act next_involvement(room, involvement)
+    order | ["mentions", "everything", "nothing", "invisible"]
+    if room["type"] == "Rooms::Direct" => order |= ["everything", "nothing"]
+    i | 0
+    for o in order
+        if o == involvement and i + 1 < :len(order) => return order[i + 1]
+        i |= i + 1
+    xx
+    return order[0]
+xx
+
+/// Rooms::InvolvementsHelper#button_to_change_involvement
+act involvement_button(c, room, involvement)
+    id | room["room_id"]
+    key | html::room_key({"id": id, "type": room["type"]})
+    nxt | next_involvement(room, involvement)
+    bell | html::img("notification-bell-" + involvement + ".svg", "aria-hidden=\"true\" ", 20)
+    label | HUMANIZE_INVOLVEMENT[involvement]
+    inner | bell + "<span class=\"for-screen-reader\" id=\"involvement_label_{key}\">{label}</span>"
+    return html::button_to("/rooms/{id}/involvement?involvement={nxt}", "put", "", " role=\"checkbox\" aria-checked=\"true\" aria-labelledby=\"involvement_label_{key}\" tabindex=\"0\" class=\"btn {involvement}\"", inner, c["csrf"])
+xx
+
+/// GET /rooms/:room_id/involvement
+act involvement(c, room_id)
+    mb | membership(c, room_id)
+    if mb == nil => return http::error_page(404)
+    id | mb["room_id"]
+    key | html::room_key({"id": id, "type": mb["type"]})
+    button | involvement_button(c, mb, mb["involvement"])
+    p | layout::page("Campfire")
+    :update!(p["main"], "<turbo-frame data-controller=\"turbo-frame\" data-action=\"notifications:ready@window-&gt;turbo-frame#load\" data-turbo-frame-url-param=\"/rooms/{id}/involvement\" id=\"involvement_{key}\">\n  {button}\n</turbo-frame>")
+    return http::html(layout::render(c, p))
+xx
+
+/// PUT /rooms/:room_id/involvement?involvement=
+act update_involvement(c, room_id)
+    mb | membership(c, room_id)
+    if mb == nil => return http::error_page(404)
+    value | http::param(c["req"], "involvement")
+    if :has(HUMANIZE_INVOLVEMENT, value) == false => return http::error_page(500)
+    uid | c["user"]["id"]
+    db::exec("update memberships set involvement = $1, updated_at = utc_now() where id = $2", [value, mb["id"]])
+    previous | mb["involvement"]
+    if mb["type"] != "Rooms::Direct" and value != previous
+        stream | db::value("select campfire_gid_param('User', $1) || ':rooms' as v", [uid])
+        room | {"id": mb["room_id"], "type": mb["type"], "name": mb["name"]}
+        if value == "invisible"
+            cable::broadcast(stream, cable::stream_tag("remove", "list_" + html::room_key(room), nil))
+        elif previous == "invisible"
+            cable::broadcast(stream, cable::stream_tag("prepend", "shared_rooms", sidebar_views::shared(room, false)))
+        xx
+    xx
+    return http::redirect(c["req"], "/rooms/" + :str(mb["room_id"]) + "/involvement")
+xx

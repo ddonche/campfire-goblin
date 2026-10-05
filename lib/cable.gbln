@@ -18,6 +18,13 @@ act broadcast_many(streams, message)
     return nil
 xx
 
+/// turbo_stream_action_tag with extra attributes (written before action and
+/// target, as tag.turbo_stream writes them), e.g. maintain_scroll="true".
+act stream_tag_with(attrs, verb, target, template)
+    tag | stream_tag(verb, target, template)
+    return "<turbo-stream " + attrs + " " + tag[14:]
+xx
+
 /// turbo_stream_action_tag
 act stream_tag(verb, target, template)
     if template == nil => return "<turbo-stream action=\"{verb}\" target=\"{target}\"></turbo-stream>"

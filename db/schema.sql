@@ -107,7 +107,7 @@ CREATE INDEX index_messages_on_room_id ON messages (room_id);
 CREATE TABLE boosts (
   id bigserial PRIMARY KEY,
   booster_id bigint NOT NULL,
-  content varchar(16) NOT NULL,
+  content varchar NOT NULL, -- limit: 16 in schema.rb, which SQLite does not enforce
   created_at timestamp(6) NOT NULL,
   message_id bigint NOT NULL REFERENCES messages (id),
   updated_at timestamp(6) NOT NULL
@@ -493,4 +493,69 @@ CREATE FUNCTION campfire_avatar_file(user_id bigint) RETURNS text LANGUAGE sql S
   SELECT b.key || '-square.webp'
   FROM active_storage_attachments a JOIN active_storage_blobs b ON b.id = a.blob_id
   WHERE a.record_type = 'User' AND a.name = 'avatar' AND a.record_id = user_id ORDER BY a.id DESC LIMIT 1
+$$;
+
+-- A message the user can reach (in one of their rooms), optionally only in
+-- one room, with what the edit form needs: mentioned users by stored sgid,
+-- each with a fresh sgid.
+CREATE FUNCTION campfire_reachable_message(p_user bigint, p_message bigint, p_room bigint, p_for_edit boolean)
+RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT json_build_object(
+    'message', campfire_message_json(m),
+    'room_type', r.type,
+    'users', CASE WHEN p_for_edit THEN (
+      SELECT json_object_agg(x.sgid, (campfire_user_json(u)::jsonb || jsonb_build_object('sgid', campfire_user_sgid(u.id)))::json)
+      FROM (SELECT DISTINCT (regexp_matches(rt.body, 'sgid="([^"]+)"', 'g'))[1] AS sgid
+            FROM action_text_rich_texts rt WHERE rt.record_type = 'Message' AND rt.record_id = m.id AND rt.name = 'body') x
+      JOIN users u ON u.id = substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint) END)
+  FROM messages m
+  JOIN rooms r ON r.id = m.room_id
+  JOIN memberships mb ON mb.room_id = m.room_id AND mb.user_id = p_user
+  WHERE m.id = p_message AND (p_room = 0 OR m.room_id = p_room)
+$$;
+
+-- Message#update! of the body, with its touches and the search index.
+CREATE FUNCTION campfire_update_message(p_message bigint, p_body text, p_plain text)
+RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  ts timestamp := utc_now();
+  m messages;
+BEGIN
+  INSERT INTO action_text_rich_texts (body, created_at, name, record_id, record_type, updated_at)
+  VALUES (p_body, ts, 'body', p_message, 'Message', ts)
+  ON CONFLICT (record_type, record_id, name) DO UPDATE SET body = excluded.body, updated_at = ts;
+  UPDATE messages SET updated_at = ts WHERE id = p_message RETURNING * INTO m;
+  UPDATE rooms SET updated_at = ts WHERE id = m.room_id;
+  UPDATE message_search_index SET body = coalesce(p_plain, '') WHERE rowid = p_message;
+  RETURN campfire_message_json(m);
+END $$;
+
+-- Message#destroy: boosts, rich text and the search index row go with it.
+CREATE FUNCTION campfire_destroy_message(p_message bigint) RETURNS void LANGUAGE sql AS $$
+  DELETE FROM boosts WHERE message_id = p_message;
+  DELETE FROM action_text_rich_texts WHERE record_type = 'Message' AND record_id = p_message;
+  DELETE FROM message_search_index WHERE rowid = p_message;
+  DELETE FROM messages WHERE id = p_message;
+$$;
+
+-- Boost creation, touching the message and (through it) the room.
+CREATE FUNCTION campfire_create_boost(p_user bigint, p_message bigint, p_content text)
+RETURNS json LANGUAGE plpgsql AS $$
+DECLARE
+  ts timestamp := utc_now();
+  b boosts;
+BEGIN
+  INSERT INTO boosts (message_id, booster_id, content, created_at, updated_at)
+  VALUES (p_message, p_user, p_content, ts, ts) RETURNING * INTO b;
+  UPDATE messages SET updated_at = ts WHERE id = p_message;
+  UPDATE rooms SET updated_at = ts WHERE id = (SELECT room_id FROM messages WHERE id = p_message);
+  RETURN json_build_object('id', b.id, 'content', b.content,
+    'booster', (SELECT campfire_user_json(u) FROM users u WHERE u.id = p_user));
+END $$;
+
+-- Mentioned users in a rich text body, by the sgid stored in it.
+CREATE FUNCTION campfire_mentions(body text) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT json_object_agg(x.sgid, campfire_user_json(u))
+  FROM (SELECT DISTINCT (regexp_matches(body, 'sgid="([^"]+)"', 'g'))[1] AS sgid) x
+  JOIN users u ON u.id = substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint
 $$;

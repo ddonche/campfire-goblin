@@ -8,6 +8,7 @@ import lib/views/messages as message_views
 import lib/views/layout as layout
 import lib/content as content
 import lib/cable as cable
+import lib/views/message_edit as edit_views
 
 /// A page of messages for the scrollback paginator. $3/$4 are the message
 /// to page before/after (0 when absent).
@@ -43,12 +44,12 @@ xx
 /// GET /rooms/:room_id/messages?before=|after=
 act index(c, room_id)
     req | c["req"]
-    if numeric(room_id) == false => return http::text(404, "Not Found")
+    if numeric(room_id) == false => return http::error_page(404)
     before | int_param(req, "before")
     after | int_param(req, "after")
-    if before < 0 or after < 0 => return http::text(404, "Not Found")
+    if before < 0 or after < 0 => return http::error_page(404)
     data | db::doc(PAGE_SQL, [c["user"]["id"], :int(room_id), before, after])
-    if data == nil or data["missing"] => return http::text(404, "Not Found")
+    if data == nil or data["missing"] => return http::error_page(404)
     list | data["messages"]
     if :len(list) == 0 => return http::head(204)
     return http::html("\n" + message_views::collection(c, list))
@@ -87,7 +88,7 @@ act create(c, room_id)
     body | nil
     if http::has_param(req, "message[body]") => body |= content::canonicalize(http::param(req, "message[body]"))
     plain | ""
-    if body != nil => plain |= content::plain_text({"body": body})
+    if body != nil => plain |= content::plain_text(with_mentions(body))
     created | db::doc("select campfire_create_message($1, $2, $3, $4, $5)", [uid, room["id"], body, http::param(req, "message[client_message_id]"), plain])
     m | created["message"]
     target | "messages_" + html::room_key(room)
@@ -101,4 +102,72 @@ act create(c, room_id)
     xx
     cable::broadcast_many(streams, {"roomId": room["id"]})
     return http::turbo_stream(cable::stream_tag("append", target, message_views::single(stream_context(c), m)) + "\n")
+xx
+
+/// A body with its mentioned users, for plain text ("@Name").
+act with_mentions(body)
+    if :has(body, "action-text-attachment") == false => return {"body": body}
+    return {"body": body, "mentions": db::doc("select campfire_mentions($1)", [body])}
+xx
+
+/// set_room (RoomScoped) and set_message: the message, in that room, in one
+/// of the user's rooms.
+act find_message(c, room_id, id, for_edit)
+    if numeric(room_id) == false or numeric(id) == false => return nil
+    return db::doc("select campfire_reachable_message($1, $2, $3, $4)", [c["user"]["id"], :int(id), :int(room_id), for_edit])
+xx
+
+act can_administer(c, m)
+    return auth::can_administer(c, m["creator_id"])
+xx
+
+/// GET /rooms/:room_id/messages/:id -- `render @message` in the full layout
+act show(c, room_id, id)
+    found | find_message(c, room_id, id, false)
+    if found == nil => return http::error_page(404)
+    p | layout::page("Campfire")
+    :update!(p["main"], message_views::single(c, found["message"]) + "\n")
+    :update!(p["frame_layout"], false)
+    return http::html(layout::render(c, p))
+xx
+
+/// GET /rooms/:room_id/messages/:id/edit
+act edit(c, room_id, id)
+    found | find_message(c, room_id, id, true)
+    if found == nil => return http::error_page(404)
+    m | found["message"]
+    if can_administer(c, m) == false => return http::head(403)
+    p | layout::page("Campfire")
+    :update!(p["main"], edit_views::edit(c, m, found["users"]))
+    :update!(p["frame_layout"], false)
+    return http::html(layout::render(c, p))
+xx
+
+/// PATCH /rooms/:room_id/messages/:id
+act update(c, room_id, id)
+    req | c["req"]
+    found | find_message(c, room_id, id, false)
+    if found == nil => return http::error_page(404)
+    m | found["message"]
+    if can_administer(c, m) == false => return http::head(403)
+    body | content::canonicalize(http::param(req, "message[body]"))
+    m |= db::doc("select campfire_update_message($1, $2, $3)", [m["id"], body, content::plain_text(with_mentions(body))])
+    room | {"id": m["room_id"], "type": found["room_type"]}
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [room["type"], room["id"]])
+    cable::broadcast(stream, cable::stream_tag_with("maintain_scroll=\"true\"", "replace", message_views::dom(m, "presentation"), message_views::presentation(broadcast_context(c), m)))
+    if :has(req["accept"], "application/json") => return http::json(200, message_views::to_json(c, m))
+    return http::redirect(req, "/rooms/" + :str(m["room_id"]) + "/messages/" + :str(m["id"]))
+xx
+
+/// DELETE /rooms/:room_id/messages/:id
+act destroy(c, room_id, id)
+    found | find_message(c, room_id, id, false)
+    if found == nil => return http::error_page(404)
+    m | found["message"]
+    if can_administer(c, m) == false => return http::head(403)
+    db::exec("select campfire_destroy_message($1)", [m["id"]])
+    stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [found["room_type"], m["room_id"]])
+    tag | cable::stream_tag("remove", message_views::dom(m, ""), nil)
+    cable::broadcast(stream, tag)
+    return http::turbo_stream(tag + "\n")
 xx
