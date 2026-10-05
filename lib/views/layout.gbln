@@ -75,6 +75,10 @@ act render(c, p)
     logo_href | "/account/logo?v=" + v
     if v == "" => logo_href |= "/account/logo"
     user_meta | ""
+    /// tag.meta name: "vapid-public-key", content: config.x.vapid.public_key
+    vapid_meta | "<meta name=\"vapid-public-key\">"
+    vapid_key | :env("VAPID_PUBLIC_KEY")
+    if vapid_key != nil and vapid_key != "" => vapid_meta |= "<meta name=\"vapid-public-key\" content=\"" + html::h(vapid_key) + "\">"
     body_classes | []
     if p["body_class"] != "" => :put_last!(body_classes, p["body_class"])
     u | c["user"]
@@ -120,7 +124,7 @@ act render(c, p)
     {user_meta}
     <meta name="action-cable-url" content="/cable">
 
-    <meta name="vapid-public-key">
+    {vapid_meta}
     <meta name="turbo-prefetch" content="true">
 
     <link rel="manifest" href="/webmanifest.json">

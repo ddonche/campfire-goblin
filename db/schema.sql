@@ -664,6 +664,27 @@ CREATE FUNCTION campfire_mentions(body text) RETURNS json LANGUAGE sql STABLE AS
   JOIN users u ON u.id = substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint
 $$;
 
+-- Room::MessagePusher's recipients: subscriptions of members other than the
+-- creator who can see the room and are not connected to it, involved in
+-- everything, or involved in mentions and mentioned. Each carries the
+-- badge WebPush::Notification shows: the user's unread room count.
+CREATE FUNCTION campfire_push_subscriptions(p_message bigint) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT coalesce(json_agg(json_build_object('id', s.id, 'endpoint', s.endpoint,
+           'p256dh_key', s.p256dh_key, 'auth_key', s.auth_key,
+           'badge', (SELECT count(*) FROM memberships u WHERE u.user_id = s.user_id AND u.unread_at IS NOT NULL))
+         ORDER BY mb.involvement DESC, s.id), '[]')
+  FROM messages m
+  JOIN memberships mb ON mb.room_id = m.room_id
+  JOIN push_subscriptions s ON s.user_id = mb.user_id
+  WHERE m.id = p_message AND mb.user_id <> m.creator_id AND mb.involvement <> 'invisible'
+    AND (mb.connected_at IS NULL OR mb.connected_at < utc_now() - interval '60 seconds')
+    AND (mb.involvement = 'everything' OR (mb.involvement = 'mentions' AND mb.user_id IN (
+      SELECT substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint
+      FROM (SELECT (regexp_matches(t.body, 'sgid="([^"]+)"', 'g'))[1] AS sgid
+            FROM action_text_rich_texts t
+            WHERE t.record_type = 'Message' AND t.record_id = m.id AND t.name = 'body') x)))
+$$;
+
 -- MessagesController#bots_eligible_for_webhook, less the creator, keeping
 -- the bots that have a webhook (User::Bot#deliver_webhook_later): in a
 -- direct room its active bots, elsewhere the active bots it mentions

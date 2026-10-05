@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# bin/push -- the elliptic-curve and AES steps of Web Push (RFC 8291
+# aes128gcm payloads, RFC 8292 VAPID), run by lib/webpush.gbln through
+# :run_cmd. Goblin has no byte strings or cryptography, so openssl does the
+# key agreement, HKDF, AES block work and ES256 signature; Goblin builds the
+# payload, computes the GCM tag (GHASH) and assembles the message. Values
+# cross between the two as lowercase hex; results go to files.
+#
+#   bin/push keys P256DH AUTH OUT
+#       P256DH and AUTH are the subscription's base64url keys. Generates the
+#       ephemeral key pair and salt and derives, as WebPush::Encryption
+#       does, the content key and nonce. Writes OUT/{salt,server_key,cek,
+#       nonce} plus OUT/h (AES(cek, 0^128), GHASH's key) and OUT/ej0
+#       (AES(cek, nonce||00000001), the tag mask).
+#   bin/push ctr CEK NONCE PLAINHEX OUT
+#       AES-128-CTR from counter block 2 (GCM's keystream); writes OUT.
+#   bin/push send URL HOST IP BODYHEX TTL URGENCY JWT_CLAIMS VAPID_PRIVATE VAPID_PUBLIC OUT
+#       Signs the VAPID JWT (ES256) and POSTs the body to URL, connecting
+#       to IP and never through a proxy (WebPush::PersistentRequest).
+#       Writes the status code to OUT.
+set -u
+cmd=$1; shift
+
+hex() { od -An -v -tx1 | tr -d ' \n'; }
+unhex() { tr -d '\n' | tr a-f A-F | basenc --base16 -d; }
+unb64url() { local s=$1; while [ $(( ${#s} % 4 )) -ne 0 ]; do s="$s="; done; printf '%s' "$s" | basenc --base64url -d; }
+b64url() { basenc --base64url -w0 | tr -d '='; }
+# HKDF-SHA256 (extract and expand): SALT IKM INFO LENGTH, all hex but LENGTH
+hkdf() {
+  openssl kdf -keylen "$4" -kdfopt digest:SHA256 -kdfopt "hexsalt:$1" -kdfopt "hexkey:$2" \
+    -kdfopt "hexinfo:$3" HKDF | tr -d ':\n' | tr A-F a-f
+}
+aes_block() { # KEY BLOCKHEX
+  printf '%s' "$2" | unhex | openssl enc -aes-128-ecb -K "$1" -nopad | hex
+}
+# DER prefixes for a P-256 SubjectPublicKeyInfo and ECPrivateKey
+SPKI=3059301306072a8648ce3d020106082a8648ce3d030107034200
+
+case "$cmd" in
+  keys)
+    p256dh=$1; auth=$2; out=$3
+    mkdir -p "$out"; cd "$out" || exit 1
+    openssl ecparam -name prime256v1 -genkey -noout -out server.pem 2> /dev/null
+    server_key=$(openssl ec -in server.pem -pubout -outform DER 2> /dev/null | tail -c 65 | hex)
+    client_key=$(unb64url "$p256dh" | hex)
+    auth_hex=$(unb64url "$auth" | hex)
+    printf '%s%s' "$SPKI" "$client_key" | unhex > client.der
+    openssl pkey -pubin -inform DER -in client.der -out client.pem 2> /dev/null
+    shared=$(openssl pkeyutl -derive -inkey server.pem -peerkey client.pem 2> /dev/null | hex)
+    salt=$(openssl rand 16 | hex)
+    info=$(printf 'WebPush: info\0' | hex)$client_key$server_key
+    prk=$(hkdf "$auth_hex" "$shared" "$info" 32)
+    cek=$(hkdf "$salt" "$prk" "$(printf 'Content-Encoding: aes128gcm\0' | hex)" 16)
+    nonce=$(hkdf "$salt" "$prk" "$(printf 'Content-Encoding: nonce\0' | hex)" 12)
+    printf '%s' "$salt" > salt; printf '%s' "$server_key" > server_key
+    printf '%s' "$cek" > cek; printf '%s' "$nonce" > nonce
+    aes_block "$cek" 00000000000000000000000000000000 > h
+    aes_block "$cek" "${nonce}00000001" > ej0
+    rm -f server.pem client.der client.pem
+    ;;
+  ctr)
+    printf '%s' "$3" | unhex | openssl enc -aes-128-ctr -K "$1" -iv "${2}00000002" | hex > "$4"
+    ;;
+  send)
+    url=$1; host=$2; ip=$3; body=$4; ttl=$5; urgency=$6; claims=$7; private=$8; public=$9; out=${10}
+    work=$(mktemp -d)
+    # VapidKey.from_keys: the raw keys as an ECPrivateKey
+    d=$(unb64url "$private" | hex); q=$(unb64url "$public" | hex)
+    printf '30770201010420%sa00a06082a8648ce3d030107a144034200%s' "$d" "$q" | unhex > "$work/vapid.der"
+    openssl ec -inform DER -in "$work/vapid.der" -out "$work/vapid.pem" 2> /dev/null
+    signing_input="$(printf '{"typ":"JWT","alg":"ES256"}' | b64url).$(printf '%s' "$claims" | b64url)"
+    # ES256 wants r||s, 32 bytes each, where openssl writes DER
+    sig=$(printf '%s' "$signing_input" | openssl dgst -sha256 -sign "$work/vapid.pem" | openssl asn1parse -inform DER 2> /dev/null \
+      | awk -F: '/INTEGER/ { v = $NF; while (length(v) < 64) v = "0" v; printf "%s", substr(v, length(v) - 63) }')
+    jwt="$signing_input.$(printf '%s' "$sig" | unhex | b64url)"
+    printf '%s' "$body" | unhex > "$work/body"
+    case "$ip" in *:*) pin="[$ip]" ;; *) pin=$ip ;; esac
+    curl --silent --noproxy '*' --globoff -o /dev/null -w '%{http_code}' \
+      --resolve "$host:443:$pin" -X POST --data-binary "@$work/body" \
+      -H "Content-Type: application/octet-stream" -H "Ttl: $ttl" -H "Urgency: $urgency" \
+      -H "Content-Encoding: aes128gcm" -H "Authorization: vapid t=$jwt,k=$public" \
+      -H "Accept: */*" -H "User-Agent: Ruby" -H "Accept-Encoding: gzip;q=1.0,deflate;q=0.6,identity;q=0.3" \
+      "$url" > "$out"
+    rm -rf "$work"
+    ;;
+esac

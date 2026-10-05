@@ -12,6 +12,7 @@ import lib/content as content
 import lib/cable as cable
 import lib/views/message_edit as edit_views
 import lib/webhooks as webhooks
+import lib/webpush as webpush
 
 /// A page of messages for the scrollback paginator. $3/$4 are the message
 /// to page before/after (0 when absent).
@@ -164,6 +165,8 @@ act post_with(c, room, raw_body, client_id, upload)
         :put_last!(streams, "user_" + :str(id) + "_unreads")
     xx
     cable::broadcast_many(streams, {"roomId": room["id"]})
+    /// Room#receive: push the message to members who are away
+    webpush::push_later(m)
     return m
 xx
 

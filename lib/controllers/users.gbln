@@ -4,6 +4,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/webpush as webpush
 import lib/storage as storage
 import lib/cable as cable
 import lib/content as content
@@ -189,7 +190,6 @@ xx
 
 /// ---------- Users::PushSubscriptionsController ----------
 
-PUSH_HOSTS | ["jmt17.google.com", "fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com", "notify.windows.com"]
 
 /// GET /users/me/push_subscriptions
 act push_subscriptions(c)
@@ -200,16 +200,10 @@ act push_subscriptions(c)
     return http::html(layout::render(c, p))
 xx
 
-/// Push::Subscription#validate_endpoint_url, short of resolving the host
-/// (Goblin has no DNS lookup; see GAPS.md).
+/// Push::Subscription#validate_endpoint_url: https, port 443, a permitted
+/// push service, resolving to a public address
 act valid_push_endpoint(endpoint)
-    parts | html::matches(endpoint, "^https://([A-Za-z0-9.-]+)(:443)?(/[^\\s]*)?$")
-    if :len(parts) == 0 => return false
-    host | :lower(:split(:split(endpoint, "/")[2], ":")[0])
-    for permitted in PUSH_HOSTS
-        if host == permitted or :ends_with(host, "." + permitted) => return true
-    xx
-    return false
+    return webpush::endpoint_ip(endpoint) != nil
 xx
 
 /// POST /users/me/push_subscriptions (JSON from the notifications controller)
@@ -247,7 +241,11 @@ xx
 /// so the notification is not sent.
 act test_push_notification(c, id)
     if :is_matching(id, "^[0-9]+$") == false => return http::error_page(404)
-    sub | db::one("select id from push_subscriptions where user_id = $1 and id = $2", [c["user"]["id"], :int(id)])
+    sub | db::one("select s.id, s.endpoint, s.p256dh_key, s.auth_key, (select count(*) from memberships u where u.user_id = s.user_id and u.unread_at is not null) as badge from push_subscriptions s where s.user_id = $1 and s.id = $2", [c["user"]["id"], :int(id)])
     if sub == nil => return http::error_page(404)
+    /// delivered now, not through the pool: any failure is an error page
+    if webpush::vapid_configured() == false => return http::error_page(500)
+    status | webpush::deliver(sub, "Campfire Test", db::value("select gen_random_uuid()::text as v", []), c["req"]["base"] + "/users/me/push_subscriptions")
+    if status != "" and :is_matching(status, "^2[0-9][0-9]$") == false => return http::error_page(500)
     return http::redirect(c["req"], "/users/me/push_subscriptions")
 xx

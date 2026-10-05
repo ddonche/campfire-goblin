@@ -1,0 +1,267 @@
+/// lib/webpush.gbln -- Web Push: Room::MessagePusher, WebPush::Pool,
+/// WebPush::Notification and the web-push gem's aes128gcm encryption.
+///
+/// Rails pushes each new message to the subscriptions of members who are
+/// not connected (involved in everything, or mentioned and involved in
+/// mentions) from a job and a thread pool. Here the request starts
+/// jobs/push.gbln as a detached process. The cryptography is split: openssl
+/// (bin/push) does key agreement, HKDF, the AES block cipher and the VAPID
+/// signature; this module builds the notification, computes AES-GCM's
+/// authentication tag (GHASH) and assembles the aes128gcm message.
+///
+/// Push is configured as Rails configures it: VAPID_PUBLIC_KEY and
+/// VAPID_PRIVATE_KEY. Without them Rails' deliveries fail and nothing is
+/// sent; here they are not attempted.
+
+import lib/db as db
+import lib/http as http
+import lib/content as content
+import lib/multipart as multipart
+import lib/opengraph as opengraph
+
+NIBBLE_XOR | [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14, 2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13, 3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12, 4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11, 5, 4, 7, 6, 1, 0, 3, 2, 13, 12, 15, 14, 9, 8, 11, 10, 6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9, 7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8, 8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4, 7, 6, 10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5, 11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4, 12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3, 13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2, 14, 15, 12, 13, 10, 11, 8, 9, 6, 7, 4, 5, 2, 3, 0, 1, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+
+PERMITTED_ENDPOINT_HOSTS | ["jmt17.google.com", "fcm.googleapis.com", "updates.push.services.mozilla.com", "web.push.apple.com", "notify.windows.com"]
+
+HEX_DIGITS | "0123456789abcdef"
+
+/// ---------- bytes ----------
+
+act idiv(a, b)
+    return :int(:floor(a / b))
+xx
+
+act xor8(a, b)
+    return NIBBLE_XOR[idiv(a, 16) * 16 + idiv(b, 16)] * 16 + NIBBLE_XOR[(a - idiv(a, 16) * 16) * 16 + (b - idiv(b, 16) * 16)]
+xx
+
+act xor_block(a, b)
+    out | []
+    i | 0
+    for x in a
+        :put_last!(out, xor8(x, b[i]))
+        i |= i + 1
+    xx
+    return out
+xx
+
+act from_hex(h)
+    out | []
+    t | :lower(:trim(h))
+    n | :len(t)
+    i | 0
+    while i + 1 < n
+        hi | :find(HEX_DIGITS, t[i:i + 1])
+        lo | :find(HEX_DIGITS, t[i + 1:i + 2])
+        :put_last!(out, hi * 16 + lo)
+        i |= i + 2
+    xx
+    return out
+xx
+
+act to_hex(bytes)
+    out | ""
+    for b in bytes
+        hi | idiv(b, 16)
+        lo | b - hi * 16
+        out |= out + HEX_DIGITS[hi:hi + 1] + HEX_DIGITS[lo:lo + 1]
+    xx
+    return out
+xx
+
+/// a number as N big-endian bytes
+act be_bytes(v, n)
+    out | []
+    x | v
+    for i in opengraph::upto(n)
+        :put_first!(out, x - idiv(x, 256) * 256)
+        x |= idiv(x, 256)
+    xx
+    return out
+xx
+
+/// ---------- AES-GCM's tag ----------
+
+/// H·x^i for i = 0..127 in GCM's bit order: multiplying by H is then the
+/// XOR of the entries for a block's set bits.
+act ghash_table(h)
+    table | []
+    v | h
+    for i in opengraph::upto(128)
+        :put_last!(table, v)
+        lsb | v[15] - idiv(v[15], 2) * 2
+        shifted | []
+        carry | 0
+        for b in v
+            :put_last!(shifted, idiv(b, 2) + carry * 128)
+            carry |= b - idiv(b, 2) * 2
+        xx
+        if lsb == 1 => shifted |= xor_block(shifted, [225, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        v |= shifted
+    xx
+    return table
+xx
+
+act gf_mul(x, table)
+    z | [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    bit | 0
+    for b in x
+        rest | b
+        weight | 128
+        for k in [0, 1, 2, 3, 4, 5, 6, 7]
+            if rest >= weight
+                z |= xor_block(z, table[bit])
+                rest |= rest - weight
+            xx
+            weight |= idiv(weight, 2)
+            bit |= bit + 1
+        xx
+    xx
+    return z
+xx
+
+/// GHASH(H, no additional data, ciphertext) XOR E(K, J0): the 16-byte tag
+act gcm_tag(h, ej0, cipher)
+    table | ghash_table(h)
+    y | [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    n | :len(cipher)
+    i | 0
+    while i < n
+        block | []
+        for k in opengraph::upto(16)
+            if i + k < n
+                :put_last!(block, cipher[i + k])
+            else
+                :put_last!(block, 0)
+            xx
+        xx
+        y |= gf_mul(xor_block(y, block), table)
+        i |= i + 16
+    xx
+    lengths | be_bytes(0, 8)
+    for b in be_bytes(n * 8, 8)
+        :put_last!(lengths, b)
+    xx
+    y |= gf_mul(xor_block(y, lengths), table)
+    return xor_block(y, ej0)
+xx
+
+/// ---------- bin/push ----------
+
+act scratch()
+    return "/tmp/campfire-push-" + :str(:secure_random(100000000, 999999999)) + :str(:secure_random(100000000, 999999999))
+xx
+
+act bin_push(args)
+    quoted | []
+    for a in args
+        :put_last!(quoted, multipart::shq(a))
+    xx
+    :run_cmd("bash " + multipart::shq(multipart::root() + "/bin/push") + " " + :join(quoted, " "))
+    return nil
+xx
+
+act read_hex(path)
+    if :file_exists(path) == false => return ""
+    return :trim(:read_text(path))
+xx
+
+/// WebPush::Encryption.encrypt: the aes128gcm body, as hex; nil when the
+/// subscription's keys are unusable (an OpenSSL error in Rails).
+act encrypt(message, p256dh, auth)
+    dir | scratch()
+    bin_push(["keys", p256dh, auth, dir])
+    k | {}
+    for name in ["salt", "server_key", "cek", "nonce", "h", "ej0"]
+        :update!(k[name], read_hex(dir + "/" + name))
+    xx
+    :run_cmd("rm -rf " + multipart::shq(dir))
+    for name in ["salt", "server_key", "cek", "nonce", "h", "ej0"]
+        if k[name] == "" => return nil
+    xx
+    if :len(k["server_key"]) != 130 or :len(k["cek"]) != 32 => return nil
+    /// the message, then the last-record delimiter and one byte of padding
+    plain | to_hex(http::utf8_bytes(message)) + "0200"
+    out | scratch()
+    bin_push(["ctr", k["cek"], k["nonce"], plain, out])
+    cipher_hex | read_hex(out)
+    if :file_exists(out) => :delete_path!(out)
+    if :len(cipher_hex) != :len(plain) => return nil
+    tag | gcm_tag(from_hex(k["h"]), from_hex(k["ej0"]), from_hex(cipher_hex))
+    rs | idiv(:len(cipher_hex), 2) + 16
+    return k["salt"] + to_hex(be_bytes(rs, 4)) + "41" + k["server_key"] + cipher_hex + to_hex(tag)
+xx
+
+/// ---------- delivery ----------
+
+act vapid_configured()
+    pub | :env("VAPID_PUBLIC_KEY")
+    priv | :env("VAPID_PRIVATE_KEY")
+    return pub != nil and pub != "" and priv != nil and priv != ""
+xx
+
+/// Push::Subscription#resolved_endpoint_ip: an https endpoint on port 443
+/// at a permitted push service, resolved to a public address; else nil.
+act endpoint_ip(endpoint)
+    u | opengraph::parse_url(endpoint)
+    if u == nil or u["scheme"] != "https" or u["port"] != 443 => return nil
+    host | :lower(u["bare_host"])
+    permitted | false
+    for p in PERMITTED_ENDPOINT_HOSTS
+        if host == p or :ends_with(host, "." + p) => permitted |= true
+    xx
+    if permitted == false => return nil
+    return opengraph::resolve(u["bare_host"])
+xx
+
+/// WebPush::Notification#encoded_message
+act encoded_message(title, body, path, badge)
+    return "\{\"title\":" + :json_stringify(title) + ",\"options\":\{\"body\":" + :json_stringify(body) + ",\"icon\":\"/account/logo\",\"data\":\{\"path\":" + :json_stringify(path) + ",\"badge\":" + :str(badge) + "}}}"
+xx
+
+/// WebPush::Notification#deliver: the push service's status code as a
+/// string ("" when the endpoint is not deliverable, "keys" when the
+/// subscription's keys are unusable).
+act deliver(sub, title, body, path)
+    ip | endpoint_ip(sub["endpoint"])
+    if ip == nil => return ""
+    /// blank or non-base64 keys raise ArgumentError, which the pool only logs
+    if opengraph::blank(sub["p256dh_key"]) or opengraph::blank(sub["auth_key"]) => return "invalid"
+    if :is_matching(sub["p256dh_key"], "^[A-Za-z0-9_-]+=*$") == false or :is_matching(sub["auth_key"], "^[A-Za-z0-9_-]+=*$") == false => return "invalid"
+    payload | encrypt(encoded_message(title, body, path, sub["badge"]), sub["p256dh_key"], sub["auth_key"])
+    if payload == nil => return "keys"
+    u | opengraph::parse_url(sub["endpoint"])
+    claims | "\{\"aud\":" + :json_stringify("https://" + u["bare_host"]) + ",\"exp\":" + :str(:int(db::value("select floor(extract(epoch from now()))::bigint + 43200 as v", []))) + ",\"sub\":\"mailto:support@37signals.com\"}"
+    out | scratch()
+    bin_push(["send", sub["endpoint"], u["bare_host"], ip, payload, "2419200", "high", claims, :env("VAPID_PRIVATE_KEY"), :env("VAPID_PUBLIC_KEY"), out])
+    status | read_hex(out)
+    if :file_exists(out) => :delete_path!(out)
+    return status
+xx
+
+/// Room::MessagePusher#push for a message: the subscriptions to notify
+/// and the notification's title, body and path.
+act notifications(message_id)
+    m | db::doc("select campfire_message_json(m) from messages m where m.id = $1", [message_id])
+    if m == nil => return nil
+    room | m["room"]
+    subs | db::doc("select campfire_push_subscriptions($1)", [message_id])
+    plain | content::plain_text_body(m)
+    title | room["name"]
+    body | m["creator"]["name"] + ": " + plain
+    if room["type"] == "Rooms::Direct"
+        title |= m["creator"]["name"]
+        body |= plain
+    xx
+    return {"subscriptions": subs, "title": title, "body": body, "path": "/rooms/" + :str(room["id"])}
+xx
+
+/// Room#push_later, after a message is created
+act push_later(m)
+    if vapid_configured() == false => return nil
+    n | db::value("select json_array_length(campfire_push_subscriptions($1)) as v", [m["id"]])
+    if n == nil or n == 0 => return nil
+    root | multipart::root()
+    :run_cmd("MESSAGE_ID=" + :str(m["id"]) + " setsid goblin run jobs/push.gbln >> " + multipart::shq(root + "/tmp/log/jobs.log") + " 2>&1 < /dev/null &", root)
+    return nil
+xx

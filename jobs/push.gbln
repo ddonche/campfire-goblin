@@ -1,0 +1,19 @@
+/// jobs/push.gbln -- Room::PushMessageJob#perform and WebPush::Pool, run
+/// by lib/webpush.gbln as its own `goblin run` process with MESSAGE_ID
+/// naming the message.
+
+import lib/db as db
+import lib/webpush as webpush
+
+message_id | :env("MESSAGE_ID")
+if message_id != nil and :is_matching(message_id, "^[0-9]+$")
+    n | webpush::notifications(:int(message_id))
+    if n != nil
+        for sub in n["subscriptions"]
+            status | webpush::deliver(sub, n["title"], n["body"], n["path"])
+            /// ExpiredSubscription (410) and OpenSSL errors: the pool's
+            /// invalid_subscription_handler destroys the subscription
+            if status == "410" or status == "keys" => db::exec("delete from push_subscriptions where id = $1", [sub["id"]])
+        xx
+    xx
+xx
