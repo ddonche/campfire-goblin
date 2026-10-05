@@ -59,7 +59,9 @@ select json_build_object(
   'bot', (
     select campfire_user_json(u) from users u
     where $2 <> '' and u.role = 2 and u.status = 0
-      and u.id::text = split_part($2, '-', 1) and u.bot_token = split_part($2, '-', 2)))
+      and u.id::text = split_part($2, '-', 1) and u.bot_token = split_part($2, '-', 2)),
+  'masked_csrf', campfire_mask_csrf($3),
+  'csrf_ok', campfire_csrf_valid($3, $4))
 """
 
 /// The :bot_key segment of /rooms/:room_id/:bot_key/messages[...], the
@@ -79,13 +81,18 @@ act context(req)
     token | http::cookie_of(req, SESSION_COOKIE)
     bot_key | :trim(path_bot_key(req["path"]))
     if bot_key == "" => bot_key |= :trim(http::param(req, "bot_key"))
-    data | db::doc(CONTEXT_SQL, [token, bot_key])
     csrf | http::cookie_of(req, CSRF_COOKIE)
     new_csrf | false
     if csrf == ""
         csrf |= csrf_token()
         new_csrf |= true
     xx
+    given | ""
+    if req["method"] != "GET" and req["method"] != "HEAD"
+        given |= http::param(req, "authenticity_token")
+        if given == "" => given |= http::header("x-csrf-token")
+    xx
+    data | db::doc(CONTEXT_SQL, [token, bot_key, csrf, given])
     user | data["user"]
     by | ""
     if user != nil
@@ -113,7 +120,9 @@ act context(req)
         "user": user,
         "authenticated_by": by,
         "session_token": token,
-        "csrf": csrf,
+        "csrf": data["masked_csrf"],
+        "csrf_raw": csrf,
+        "csrf_ok": data["csrf_ok"],
         "new_csrf": new_csrf,
         "flash": flash,
         "had_flash": raw_flash != "",
@@ -145,11 +154,8 @@ act verified_request(c)
     m | req["method"]
     if m == "GET" or m == "HEAD" => return true
     if c["authenticated_by"] == "bot_key" => return true
-    expected | c["csrf"]
     if c["new_csrf"] => return false
-    given | http::param(req, "authenticity_token")
-    if given == "" => given |= http::header("x-csrf-token")
-    return given != "" and given == expected
+    return c["csrf_ok"]
 xx
 
 /// Cookies every response carries: the CSRF cookie when it is new, the
@@ -165,7 +171,7 @@ act finish(c, res)
     res |= http::add_header(res, "X-Version", "0")
     res |= http::add_header(res, "X-Rev", "")
     if c["new_csrf"]
-        res |= http::add_cookie(res, CSRF_COOKIE, c["csrf"], "; path=/; httponly; samesite=lax")
+        res |= http::add_cookie(res, CSRF_COOKIE, c["csrf_raw"], "; path=/; httponly; samesite=lax")
     xx
     if c["authenticated_by"] == "session"
         res |= http::set_permanent_cookie(res, SESSION_COOKIE, c["session_token"], true)

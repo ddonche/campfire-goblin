@@ -314,6 +314,180 @@ act wants_turbo_stream(req)
     return :has(req["accept"], "text/vnd.turbo-stream.html")
 xx
 
+/// ---------- format negotiation (ActionDispatch::Http::MimeNegotiation) ----------
+
+/// Rails' registered MIME types in registration order (Mime::SET), each
+/// with its synonyms; turbo-rails adds turbo_stream.
+act mime_types()
+    return [
+        ["html", "text/html", "application/xhtml+xml"], ["text", "text/plain"],
+        ["js", "text/javascript", "application/javascript", "application/x-javascript"],
+        ["css", "text/css"], ["ics", "text/calendar"], ["csv", "text/csv"], ["vcf", "text/vcard"],
+        ["vtt", "text/vtt"], ["png", "image/png"], ["jpeg", "image/jpeg", "image/pjpeg"],
+        ["gif", "image/gif"], ["bmp", "image/bmp"], ["tiff", "image/tiff"], ["svg", "image/svg+xml"],
+        ["webp", "image/webp"], ["mpeg", "video/mpeg"], ["mp3", "audio/mpeg"], ["ogg", "audio/ogg"],
+        ["m4a", "audio/aac"], ["webm", "video/webm"], ["mp4", "video/mp4"], ["otf", "font/otf"],
+        ["ttf", "font/ttf"], ["woff", "font/woff"], ["woff2", "font/woff2"],
+        ["xml", "application/xml", "text/xml", "application/x-xml"], ["rss", "application/rss+xml"],
+        ["atom", "application/atom+xml"], ["yaml", "application/x-yaml", "text/yaml"],
+        ["multipart_form", "multipart/form-data"], ["url_encoded_form", "application/x-www-form-urlencoded"],
+        ["json", "application/json", "text/x-json", "application/jsonrequest"],
+        ["pdf", "application/pdf"], ["zip", "application/zip"], ["gzip", "application/gzip"],
+        ["turbo_stream", "text/vnd.turbo-stream.html"]
+    ]
+xx
+
+/// Mime::Type.lookup: a registered type's symbol, "all" for */*, nil
+/// for a type Rails doesn't know (which request.formats drops)
+act mime_symbol(name)
+    if name == "*/*" => return "all"
+    for t in mime_types()
+        for i in upto(1, :len(t))
+            if t[i] == name => return t[0]
+        xx
+    xx
+    return nil
+xx
+
+act upto(a, b)
+    out | []
+    i | a
+    while i < b
+        :put_last!(out, i)
+        i |= i + 1
+    xx
+    return out
+xx
+
+/// Mime::Type.parse for one media range: text/* and application/* expand
+/// to every registered type they match, in registration order
+act parse_range(name)
+    if name == "text/*" or name == "application/*"
+        cut | :len(name) - 1
+        prefix | name[0:cut]
+        out | []
+        for t in mime_types()
+            hit | false
+            for i in upto(1, :len(t))
+                if :starts_with(t[i], prefix) => hit |= true
+            xx
+            if hit => :put_last!(out, t[0])
+        xx
+        return out
+    xx
+    sym | mime_symbol(name)
+    if sym == nil => return []
+    return [sym]
+xx
+
+/// The q of "type;q=0.5", 1.0 without one
+act accept_q(item)
+    parts | :split(item, ";")
+    q | 1.0
+    for part in parts[1:]
+        kv | :trim(part)
+        if :starts_with(kv, "q=") => q |= :float(kv[2:])
+    xx
+    return q
+xx
+
+/// request.formats as symbols: the path's extension (params[:format]),
+/// else a valid Accept header, else xhr's js, else html
+act formats(req)
+    path | req["path"]
+    if :ends_with(path, ".json") => return ["json"]
+    if :ends_with(path, ".js") => return ["js"]
+    accept | req["accept"]
+    browser_like | :is_matching(accept, ",\\s*\\*/\\*") or :is_matching(accept, "\\*/\\*\\s*,")
+    valid | accept != "" and (req["xhr"] or browser_like == false)
+    if valid == false
+        if req["xhr"] => return ["js"]
+        return ["html"]
+    xx
+    if :has(accept, ",") == false
+        only | :split(accept, ";")
+        return parse_range(:trim(only[0]))
+    xx
+    /// AcceptList.sort!: by q, highest first, keeping header order on ties
+    items | []
+    for raw in :split(accept, ",")
+        pieces | :split(raw, ";")
+        name | :trim(pieces[0])
+        if name != ""
+            q | accept_q(raw)
+            entry | {"name": name, "q": q}
+            sorted | []
+            placed | false
+            for item in items
+                if placed == false and item["q"] < q
+                    :put_last!(sorted, entry)
+                    placed |= true
+                xx
+                :put_last!(sorted, item)
+            xx
+            if placed == false => :put_last!(sorted, entry)
+            items |= sorted
+        xx
+    xx
+    out | []
+    for item in items
+        for sym in parse_range(item["name"])
+            :put_last!(out, sym)
+        xx
+    xx
+    return out
+xx
+
+/// The 406 ActionController::UnknownFormat and MissingExactTemplate
+/// become: an empty page, or the exceptions app's JSON when the request's
+/// first format is json
+act not_acceptable(req)
+    fs | formats(req)
+    if :len(fs) > 0 and fs[0] == "json"
+        res | response(406, "\{\"status\":406,\"error\":\"Not Acceptable\"}")
+        :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+        return res
+    xx
+    return response(406, " ")
+xx
+
+/// respond_to: the first of `order` the request accepts, or nil
+act negotiate(req, order)
+    for f in formats(req)
+        if f == "all" => return order[0]
+        if :has(order, f) => return f
+    xx
+    return nil
+xx
+
+/// True when the template lookup only accepts js, which also finds html
+/// templates and renders them without a layout
+act js_only(req)
+    fs | formats(req)
+    return :len(fs) == 1 and fs[0] == "js"
+xx
+
+/// An implicitly rendered template answers only the formats it exists in:
+/// a 200 whose body is html, a Turbo Stream, JSON or JavaScript is checked
+/// against request.formats, as Rails' template lookup would. Responses that
+/// negotiated for themselves (respond_to, render json:) set "negotiated".
+act check_template_format(req, res)
+    if req["method"] != "GET" and req["method"] != "HEAD" => return res
+    if res["status"] != 200 or :has(res, "negotiated") => return res
+    ctype_parts | :split(res["headers"]["Content-Type"], ";")
+    ctype | ctype_parts[0]
+    fmt | nil
+    if ctype == "text/html" => fmt |= "html"
+    if ctype == "text/vnd.turbo-stream.html" => fmt |= "turbo_stream"
+    if ctype == "application/json" => fmt |= "json"
+    if ctype == "text/javascript" => fmt |= "js"
+    if fmt == nil => return res
+    fs | formats(req)
+    if :len(fs) == 0 or :has(fs, "all") or :has(fs, fmt) => return res
+    if fmt == "html" and js_only(req) => return res
+    return not_acceptable(req)
+xx
+
 /// ---------- response ----------
 
 act response(status, body)
@@ -338,6 +512,7 @@ xx
 act json(status, value)
     res | response(status, :json_stringify(value))
     :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    :update!(res["negotiated"], true)
     return res
 xx
 

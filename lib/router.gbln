@@ -153,8 +153,14 @@ act dispatch(c)
     if n == 0 => return rooms::root(c)
     if n == 3 and s[0] == "users" and s[2] == "avatar" and m == "GET" => return files::avatar(c, s[1])
 
+    /// resources :rooms comes first in routes.rb, so GET and DELETE
+    /// /rooms/opens are rooms#show and rooms#destroy, and /rooms/new is a
+    /// missing action
+    if s[0] == "rooms" and n == 2 and s[1] == "new" and m == "GET" => return not_found(c)
     if s[0] == "rooms" and n >= 2 and (s[1] == "opens" or s[1] == "closeds" or s[1] == "directs")
         kind | s[1]
+        if n == 2 and m == "GET" => return rooms::show(c, s[1], "")
+        if n == 2 and m == "DELETE" => return rooms::destroy(c, s[1])
         if n == 3 and s[2] == "new" and m == "GET"
             if kind == "opens" => return room_admin::new_open(c)
             if kind == "closeds" => return room_admin::new_closed(c)
@@ -194,6 +200,8 @@ act dispatch(c)
             if n == 4 and m == "DELETE" => return messages::destroy(c, room_id, s[3])
         xx
         if n == 3 and s[2] == "refresh" and m == "GET" => return room_parts::refresh(c, s[1])
+        /// routed to Rooms::SettingsController, which doesn't exist
+        if n == 3 and s[2] == "settings" and m == "GET" => return http::error_page(500)
         if n == 3 and s[2] == "involvement" and m == "GET" => return room_parts::involvement(c, s[1])
         if n == 3 and s[2] == "involvement" and (m == "PUT" or m == "PATCH") => return room_parts::update_involvement(c, s[1])
         return not_found(c)

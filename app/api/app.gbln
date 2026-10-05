@@ -12,6 +12,7 @@ import lib/router as router
 req | http::request()
 c | auth::context(req)
 res | router::dispatch(c)
+res |= http::check_template_format(req, res)
 if :has(res, "context") => c |= res["context"]
 res |= auth::finish(c, res)
 /// the upload's sliced parts, once the request is done with them

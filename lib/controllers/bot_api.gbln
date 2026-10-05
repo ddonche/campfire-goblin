@@ -14,6 +14,8 @@ import lib/webhooks as webhooks
 act json_response(status, value)
     res | http::response(status, ojson::encode(value))
     :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    /// the bot routes default to the json format
+    :update!(res["negotiated"], true)
     return res
 xx
 

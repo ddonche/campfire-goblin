@@ -101,20 +101,26 @@ act autocomplete(c)
     for row in db::all(AUTOCOMPLETE_SQL, [q, room_id, (page - 1) * AUTOCOMPLETE_PER_PAGE])
         :put_last!(users, row["u"])
     xx
-    if :has(req["accept"], "application/json")
+    /// respond_to html (without a layout), json
+    format | http::negotiate(req, ["html", "json"])
+    if format == nil => return http::not_acceptable(req)
+    if format == "json"
         items | []
         for u in users
             :put_last!(items, "\{\"name\":" + content::json_html(html::h(u["name"])) + ",\"value\":" + :str(u["id"]) + ",\"avatar_url\":" + :json_stringify(req["base"] + u["avatar"]) + ",\"sgid\":" + :json_stringify(u["sgid"]) + "}")
         xx
         res | http::response(200, "[" + :join(items, ",") + "]")
         :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+        :update!(res["negotiated"], true)
         return res
     xx
     out | ""
     for u in users
         out |= out + user_views::prompt_item(u)
     xx
-    return http::html(out + "\n")
+    res | http::html(out + "\n")
+    :update!(res["negotiated"], true)
+    return res
 xx
 
 /// ---------- Users::ProfilesController ----------
@@ -236,9 +242,8 @@ act destroy_push_subscription(c, id)
     return http::redirect(c["req"], "/users/me/push_subscriptions")
 xx
 
-/// POST /users/me/push_subscriptions/:id/test_notifications. Delivering a Web
-/// Push message needs an outbound HTTPS client, which Goblin lacks (GAPS.md),
-/// so the notification is not sent.
+/// POST /users/me/push_subscriptions/:id/test_notifications: delivered at
+/// once (lib/webpush.gbln); Rails lets any failure become a 500.
 act test_push_notification(c, id)
     if :is_matching(id, "^[0-9]+$") == false => return http::error_page(404)
     sub | db::one("select s.id, s.endpoint, s.p256dh_key, s.auth_key, (select count(*) from memberships u where u.user_id = s.user_id and u.unread_at is not null) as badge from push_subscriptions s where s.user_id = $1 and s.id = $2", [c["user"]["id"], :int(id)])

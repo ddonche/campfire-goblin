@@ -1,0 +1,3 @@
+import lib/m as m
+say m::hello()
+say m::NAMES

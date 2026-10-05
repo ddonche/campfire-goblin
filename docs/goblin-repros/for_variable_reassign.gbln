@@ -1,0 +1,15 @@
+act f(halves)
+    out | []
+    for h in halves
+        groups | []
+        if h != ""
+            for g in :split(h, ":")
+                g |= :str(g)
+                :put_last!(groups, g)
+            xx
+        xx
+        :put_last!(out, groups)
+    xx
+    return out
+xx
+say f(["1:ab", ""])

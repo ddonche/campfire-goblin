@@ -64,8 +64,8 @@ act ids_sql()
 xx
 
 act not_found_redirect(c)
-    c |= auth::flash_next(c, "alert", "Room not found or inaccessible")
-    return auth::keep(c, http::redirect(c["req"], "/"))
+    flashed | auth::flash_next(c, "alert", "Room not found or inaccessible")
+    return auth::keep(flashed, http::redirect(c["req"], "/"))
 xx
 
 /// ensure_permission_to_create_rooms

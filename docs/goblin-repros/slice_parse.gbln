@@ -1,0 +1,5 @@
+act f(rest, x)
+    i | 1
+    return rest[:len(x) + i:]
+xx
+say f("abcdef", "ab")

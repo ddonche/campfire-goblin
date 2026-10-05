@@ -39,8 +39,8 @@ act numeric(s)
 xx
 
 act not_found_redirect(c)
-    c |= auth::flash_next(c, "alert", "Room not found or inaccessible")
-    return auth::keep(c, http::redirect(c["req"], "/"))
+    flashed | auth::flash_next(c, "alert", "Room not found or inaccessible")
+    return auth::keep(flashed, http::redirect(c["req"], "/"))
 xx
 
 /// GET /rooms/:id and /rooms/:id/@:message_id

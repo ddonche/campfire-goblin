@@ -15,7 +15,6 @@ xx
 
 /// GET /session/new
 act new(c)
-    if auth::signed_in(c) => return http::redirect(c["req"], "/")
     any | db::value("select count(*)::int as n from users", [])
     if any == 0 => return http::redirect(c["req"], "/first_run")
     return render_new(c, 200)
@@ -24,7 +23,6 @@ xx
 /// POST /session
 act create(c)
     req | c["req"]
-    if auth::signed_in(c) => return http::redirect(req, "/")
     email | http::param(req, "email_address")
     password | http::param(req, "password")
     user | db::one("select id from users where status = 0 and email_address = $1 and password_digest is not null and crypt($2, password_digest) = password_digest", [email, password])

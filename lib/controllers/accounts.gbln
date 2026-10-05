@@ -76,7 +76,7 @@ act edit(c)
     return http::html(layout::render(c, p))
 xx
 
-/// PATCH/PUT /account -- name and settings (logo uploads: see GAPS.md)
+/// PATCH/PUT /account -- name, settings and logo
 act update(c)
     if auth::is_admin(c) == false => return http::head(403)
     req | c["req"]

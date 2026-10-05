@@ -1,0 +1,4 @@
+NAMES | ["a", "b"]
+act hello()
+    return 1
+xx

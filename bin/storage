@@ -61,7 +61,10 @@ case "$cmd" in
     ;;
   unb64)
     # urlsafe base64 to text, for a QR code id
-    printf '%s' "$1" | tr '_-' '/+' | base64 -d > "$2" 2>/dev/null || : > "$2"
+    # Base64.urlsafe_decode64 adds the padding when there is none
+    data=$1
+    case "$data" in *=) ;; *) while [ $(( ${#data} % 4 )) -ne 0 ]; do data="$data="; done ;; esac
+    printf '%s' "$data" | tr '_-' '/+' | base64 -d > "$2" 2>/dev/null || : > "$2"
     ;;
   ingest)
     mkdir -p "$(dirname "$2")"

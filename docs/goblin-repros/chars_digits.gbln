@@ -1,0 +1,9 @@
+act f(s)
+    n | 0
+    for ch in :chars(s)
+        d | :find("0123456789abcdef", ch)
+        n |= n * 16 + d
+    xx
+    return n
+xx
+say f("1f")

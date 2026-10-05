@@ -1,0 +1,13 @@
+act f(n)
+    out | []
+    i | 0
+    while i < n
+        part | "p" + :str(i)
+        if :len(part) > 0
+            :put_last!(out, part)
+        xx
+        i |= i + 1
+    xx
+    return out
+xx
+say f(3)

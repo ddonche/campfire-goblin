@@ -241,6 +241,36 @@ CREATE FUNCTION campfire_verify(signed text, purpose text) RETURNS text LANGUAGE
     THEN campfire_unb64(split_part(signed, '--', 1)) END
 $$;
 
+-- Form authenticity tokens, masked as Rails masks them: a 32-byte one-time
+-- pad followed by the pad XOR the real token, URL-safe base64 without
+-- padding (86 characters). The real token is the SHA-256 of the CSRF
+-- cookie.
+CREATE FUNCTION campfire_xor32(a bytea, b bytea) RETURNS bytea LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE r bytea := a;
+BEGIN
+  FOR i IN 0..31 LOOP
+    r := set_byte(r, i, get_byte(a, i) # get_byte(b, i));
+  END LOOP;
+  RETURN r;
+END $$;
+
+CREATE FUNCTION campfire_mask_csrf(raw text) RETURNS text LANGUAGE sql VOLATILE AS $$
+  SELECT rtrim(translate(encode(p || campfire_xor32(p, digest(raw, 'sha256')), 'base64'), E'+/\n', '-_'), '=')
+  FROM (SELECT gen_random_bytes(32) AS p) x
+$$;
+
+-- valid_authenticity_token?: the unmasked token, or a masked one.
+CREATE FUNCTION campfire_csrf_valid(raw text, given text) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+DECLARE b bytea;
+BEGIN
+  IF given IS NULL OR given = '' OR raw IS NULL OR raw = '' THEN RETURN false; END IF;
+  IF given = raw THEN RETURN true; END IF;
+  IF length(given) <> 86 THEN RETURN false; END IF;
+  b := decode(translate(given, '-_', '+/') || '==', 'base64');
+  RETURN campfire_xor32(substring(b FROM 1 FOR 32), substring(b FROM 33 FOR 32)) = digest(raw, 'sha256');
+EXCEPTION WHEN others THEN RETURN false;
+END $$;
+
 -- Rails' signed_id(purpose: :avatar) for users.
 CREATE FUNCTION campfire_avatar_token(user_id bigint) RETURNS text LANGUAGE sql STABLE AS $$
   SELECT campfire_sign('{"_rails":{"data":' || user_id || ',"pur":"user/avatar"}}', 'signed_id')

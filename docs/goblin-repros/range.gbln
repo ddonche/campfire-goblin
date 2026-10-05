@@ -1,0 +1,2 @@
+r | :range(0, 3)
+say r

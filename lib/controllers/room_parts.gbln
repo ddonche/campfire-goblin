@@ -40,18 +40,16 @@ act refresh(c, room_id)
     since | http::param(c["req"], "since")
     if :is_matching(since, "^-?[0-9]+$") == false => since |= "0"
     data | db::doc(REFRESH_SQL, [mb["room_id"], :int(since)])
-    sc | c
-    :update!(sc["csrf"], nil)
     out | ""
     if :len(data["created"]) > 0
         list | ""
         for m in data["created"]
-            list |= list + message_views::single(sc, m)
+            list |= list + message_views::single(c, m)
         xx
         out |= cable::stream_tag("append", "messages_" + html::room_key({"id": mb["room_id"], "type": mb["type"]}), "\n  " + list + "\n") + "\n"
     xx
     for m in data["updated"]
-        out |= out + cable::stream_tag("replace", message_views::dom(m, ""), message_views::single(sc, m)) + "\n"
+        out |= out + cable::stream_tag("replace", message_views::dom(m, ""), message_views::single(c, m)) + "\n"
     xx
     return http::turbo_stream(out)
 xx

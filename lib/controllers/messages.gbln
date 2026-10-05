@@ -221,7 +221,10 @@ act update(c, room_id, id)
     room | {"id": m["room_id"], "type": found["room_type"]}
     stream | db::value("select campfire_gid_param($1, $2) || ':messages'", [room["type"], room["id"]])
     cable::broadcast(stream, cable::stream_tag_with("maintain_scroll=\"true\"", "replace", message_views::dom(m, "presentation"), message_views::presentation(broadcast_context(c), m)))
-    if :has(req["accept"], "application/json")
+    /// respond_to html, json
+    format | http::negotiate(req, ["html", "json"])
+    if format == nil => return http::not_acceptable(req)
+    if format == "json"
         res | http::response(200, ojson::encode(message_views::to_json(c, m)))
         :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
         return res

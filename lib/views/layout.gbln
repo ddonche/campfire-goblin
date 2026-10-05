@@ -1,6 +1,7 @@
 /// lib/views/layout.gbln -- layouts/application.html.erb and _lightbox
 
 import lib/html as html
+import lib/http as http
 
 HEAD_ASSETS | :read_text("lib/head_assets.html")
 
@@ -70,6 +71,8 @@ act render(c, p)
     csrf | c["csrf"]
     /// turbo-rails' frame layout, unless the controller names its own layout
     if c["req"]["turbo_frame"] != "" and p["frame_layout"] => return render_frame(c, p)
+    /// a js-only request finds the html template but no js layout
+    if http::js_only(c["req"]) => return p["main"]
     account | c["account"]
     v | account["v"]
     logo_href | "/account/logo?v=" + v
