@@ -1,0 +1,151 @@
+/// lib/webhooks.gbln -- bot webhooks: MessagesController#deliver_webhooks_to_bots,
+/// Bot::WebhookJob and Webhook#deliver.
+///
+/// Rails enqueues a job per eligible bot and a Resque worker POSTs the
+/// message to the bot's URL. Here the request writes a job file to
+/// storage/jobs and starts jobs/webhook.gbln as a detached `goblin run`
+/// process, so the response does not wait on the bot. That process POSTs
+/// with curl (bin/net: Goblin has no HTTP client) and turns the bot's answer
+/// into a message exactly as Webhook#deliver does: a 200 text/html or
+/// text/plain body becomes a text message, any other response with a
+/// content type becomes an attachment, and a timeout becomes "Failed to
+/// respond within 7 seconds".
+
+import lib/db as db
+import lib/ojson as ojson
+import lib/content as content
+import lib/multipart as multipart
+
+/// Webhook::ENDPOINT_TIMEOUT, in seconds
+act endpoint_timeout()
+    return 7
+xx
+
+JOBS | "storage/jobs"
+
+/// Mime::Type.lookup(type): [symbol, canonical type] for the types Rails
+/// registers; an unregistered type keeps its string and has no symbol.
+MIME | {
+    "application/atom+xml": ["atom", "application/atom+xml"],
+    "application/gzip": ["gzip", "application/gzip"],
+    "application/javascript": ["js", "text/javascript"],
+    "application/json": ["json", "application/json"],
+    "application/jsonrequest": ["json", "application/json"],
+    "application/pdf": ["pdf", "application/pdf"],
+    "application/problem+json": ["json", "application/json"],
+    "application/rss+xml": ["rss", "application/rss+xml"],
+    "application/x-gzip": ["gzip", "application/gzip"],
+    "application/x-javascript": ["js", "text/javascript"],
+    "application/x-www-form-urlencoded": ["url_encoded_form", "application/x-www-form-urlencoded"],
+    "application/x-xml": ["xml", "application/xml"],
+    "application/x-yaml": ["yaml", "application/x-yaml"],
+    "application/xhtml+xml": ["html", "text/html"],
+    "application/xml": ["xml", "application/xml"],
+    "application/zip": ["zip", "application/zip"],
+    "audio/aac": ["m4a", "audio/aac"],
+    "audio/mp4": ["m4a", "audio/aac"],
+    "audio/mpeg": ["mp3", "audio/mpeg"],
+    "audio/ogg": ["ogg", "audio/ogg"],
+    "font/otf": ["otf", "font/otf"],
+    "font/ttf": ["ttf", "font/ttf"],
+    "font/woff": ["woff", "font/woff"],
+    "font/woff2": ["woff2", "font/woff2"],
+    "image/bmp": ["bmp", "image/bmp"],
+    "image/gif": ["gif", "image/gif"],
+    "image/jpeg": ["jpeg", "image/jpeg"],
+    "image/png": ["png", "image/png"],
+    "image/svg+xml": ["svg", "image/svg+xml"],
+    "image/tiff": ["tiff", "image/tiff"],
+    "image/webp": ["webp", "image/webp"],
+    "multipart/form-data": ["multipart_form", "multipart/form-data"],
+    "text/calendar": ["ics", "text/calendar"],
+    "text/css": ["css", "text/css"],
+    "text/csv": ["csv", "text/csv"],
+    "text/html": ["html", "text/html"],
+    "text/javascript": ["js", "text/javascript"],
+    "text/markdown": ["md", "text/markdown"],
+    "text/plain": ["text", "text/plain"],
+    "text/vcard": ["vcf", "text/vcard"],
+    "text/vnd.turbo-stream.html": ["turbo_stream", "text/vnd.turbo-stream.html"],
+    "text/vtt": ["vtt", "text/vtt"],
+    "text/x-json": ["json", "application/json"],
+    "text/xml": ["xml", "application/xml"],
+    "text/yaml": ["yaml", "application/x-yaml"],
+    "video/mp4": ["mp4", "video/mp4"],
+    "video/mpeg": ["mpeg", "video/mpeg"],
+    "video/webm": ["webm", "video/webm"],
+    "vtt": ["vtt", "text/vtt"]
+}
+
+act mime_lookup(t)
+    if :has(MIME, t) => return MIME[t]
+    return ["", t]
+xx
+
+/// Net::HTTPResponse#content_type: "main/sub" from the header, each part
+/// stripped and downcased, or just "main" without a slash; nil without one.
+act response_content_type(header)
+    if header == nil or header == "" => return nil
+    t | :split(header, ";")[0]
+    t |= :str(t)
+    slash | :find(t, "/")
+    if slash == nil => return :lower(:trim(t))
+    return :lower(:trim(t[0:slash])) + "/" + :lower(:trim(t[slash + 1:]))
+xx
+
+/// deliver_webhooks_to_bots, after a message is created by a person or a bot
+act deliver_later(m)
+    bots | db::doc("select campfire_webhook_bots($1)", [m["id"]])
+    if bots == nil or :len(bots) == 0 => return nil
+    root | multipart::root()
+    for bot in bots
+        id | :str(:secure_random(100000000, 999999999)) + :str(:secure_random(100000000, 999999999))
+        job | root + "/" + JOBS + "/" + id + ".json"
+        :write_text!(job, :json_stringify({"bot_key": bot["bot_key"], "url": bot["url"], "message_id": m["id"]}))
+        :run_cmd("JOB=" + multipart::shq(job) + " setsid goblin run jobs/webhook.gbln >> " + multipart::shq(root + "/tmp/log/jobs.log") + " 2>&1 < /dev/null &", root)
+    xx
+    return nil
+xx
+
+/// Webhook#payload
+act payload(bot, m)
+    room | m["room"]
+    plain | content::plain_text_body(m)
+    :update_where!(plain, "@" + bot["name"], "")
+    plain |= :trim(plain)
+    return ojson::encode(ojson::object([
+        ["user", ojson::object([["id", m["creator"]["id"]], ["name", m["creator"]["name"]]])],
+        ["room", ojson::object([["id", room["id"]], ["name", room["name"]], ["path", "/rooms/" + :str(room["id"]) + "/" + bot["bot_key"] + "/messages"]])],
+        ["message", ojson::object([
+            ["id", m["id"]],
+            ["body", ojson::object([["html", m["body"]], ["plain", plain]])],
+            ["path", "/rooms/" + :str(room["id"]) + "/@" + :str(m["id"])]
+        ])]
+    ]))
+xx
+
+/// Webhook#post: returns {"status", "content_type", "exit", "body_path"}
+act post(url, body, dir)
+    :write_text!(dir + ".payload", body)
+    :run_cmd("bash " + multipart::shq(multipart::root() + "/bin/net") + " post " + multipart::shq(url) + " " + multipart::shq(dir + ".payload") + " " + :str(endpoint_timeout()) + " " + multipart::shq(dir))
+    meta | ["000", "", "1"]
+    if :file_exists(dir + "/meta")
+        fields | :split(:trim(:read_text(dir + "/meta")), "\t")
+        if :len(fields) >= 3 => meta |= fields
+    xx
+    return {"status": :str(meta[0]), "content_type": response_content_type(:str(meta[1])), "exit": :str(meta[2]), "body_path": dir + "/body"}
+xx
+
+/// Webhook#deliver: what the bot says back, as the reply to post --
+/// {"text": ...}, {"upload": ...} or nil for no reply.
+act reply_for(res)
+    if res["exit"] == "28" => return {"text": "Failed to respond within " + :str(endpoint_timeout()) + " seconds"}
+    if res["exit"] != "0" => return nil
+    ct | res["content_type"]
+    if res["status"] == "200" and (ct == "text/html" or ct == "text/plain")
+        return {"text": :read_text(res["body_path"])}
+    xx
+    if ct == nil => return nil
+    mime | mime_lookup(ct)
+    return {"upload": {"path": res["body_path"], "filename": "attachment." + mime[0], "content_type": mime[1]}}
+xx

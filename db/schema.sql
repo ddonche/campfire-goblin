@@ -640,6 +640,26 @@ CREATE FUNCTION campfire_mentions(body text) RETURNS json LANGUAGE sql STABLE AS
   JOIN users u ON u.id = substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint
 $$;
 
+-- MessagesController#bots_eligible_for_webhook, less the creator, keeping
+-- the bots that have a webhook (User::Bot#deliver_webhook_later): in a
+-- direct room its active bots, elsewhere the active bots it mentions
+-- (Message#mentionees: mentioned users who belong to the room).
+CREATE FUNCTION campfire_webhook_bots(p_message bigint) RETURNS json LANGUAGE sql STABLE AS $$
+  SELECT coalesce(json_agg(json_build_object('id', u.id, 'name', u.name,
+           'bot_key', u.id || '-' || u.bot_token, 'url', w.url) ORDER BY u.id), '[]')
+  FROM messages m
+  JOIN rooms r ON r.id = m.room_id
+  JOIN memberships mb ON mb.room_id = r.id
+  JOIN users u ON u.id = mb.user_id
+  JOIN webhooks w ON w.user_id = u.id
+  WHERE m.id = p_message AND u.role = 2 AND u.status = 0 AND u.id <> m.creator_id
+    AND (r.type = 'Rooms::Direct' OR u.id IN (
+      SELECT substring(campfire_unb64(split_part(x.sgid, '--', 1)) FROM 'gid://campfire/User/(\d+)')::bigint
+      FROM (SELECT (regexp_matches(t.body, 'sgid="([^"]+)"', 'g'))[1] AS sgid
+            FROM action_text_rich_texts t
+            WHERE t.record_type = 'Message' AND t.record_id = m.id AND t.name = 'body') x))
+$$;
+
 -- ---------- Rooms ----------
 -- memberships.grant_to: Membership.insert_all, which skips users who already
 -- belong to the room. Users go in id order, as User.where(...) returns them.

@@ -9,6 +9,7 @@ import lib/cable as cable
 import lib/content as content
 import lib/views/messages as message_views
 import lib/controllers/messages as messages
+import lib/webhooks as webhooks
 
 act json_response(status, value)
     res | http::response(status, ojson::encode(value))
@@ -84,7 +85,7 @@ act index(c, room_id, bot_key)
 xx
 
 /// POST /rooms/:room_id/:bot_key/messages -- the raw request body is the
-/// message (attachments: see GAPS.md)
+/// message, or an `attachment` file field is
 act create(c, room_id)
     room | find_room(c, room_id)
     if room == nil => return head_json(404)
@@ -94,6 +95,7 @@ act create(c, room_id)
     if upload != nil => body |= nil
     if upload == nil and blank(body) => return head_json(422)
     m | messages::post_with(c, room, body, "", upload)
+    webhooks::deliver_later(m)
     res | head_json(201)
     :update!(res["headers"]["Location"], c["req"]["base"] + "/messages/" + :str(m["id"]))
     return res

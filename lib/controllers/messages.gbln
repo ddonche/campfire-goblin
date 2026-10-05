@@ -11,6 +11,7 @@ import lib/views/layout as layout
 import lib/content as content
 import lib/cable as cable
 import lib/views/message_edit as edit_views
+import lib/webhooks as webhooks
 
 /// A page of messages for the scrollback paginator. $3/$4 are the message
 /// to page before/after (0 when absent).
@@ -115,6 +116,7 @@ act create(c, room_id)
     upload | nil
     if :has(req["files"], "message[attachment]") => upload |= req["files"]["message[attachment]"]
     m | post_with(c, room, body, http::param(req, "message[client_message_id]"), upload)
+    webhooks::deliver_later(m)
     return http::turbo_stream(cable::stream_tag("append", "messages_" + html::room_key(room), message_views::single(stream_context(c), m)) + "\n")
 xx
 

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# bin/net -- the outbound HTTP behind lib/webhooks.gbln, run through
+# Goblin's :run_cmd. Goblin has no HTTP client and no sockets, so curl makes
+# the requests; deciding what a response means stays in Goblin. As with
+# bin/storage, results go to files rather than stdout.
+#
+#   bin/net post URL BODYFILE TIMEOUT OUTDIR
+#       POSTs BODYFILE as application/json the way Net::HTTP does (its
+#       default headers; no redirects followed), with TIMEOUT seconds to
+#       connect and to get the response. Net::HTTP's read timeout restarts
+#       with each read, so a reply trickled out over longer than TIMEOUT
+#       still arrives there; curl has no per-read timeout (its low-speed
+#       limit does not cover waiting for the response headers), so here
+#       the whole exchange must finish within TIMEOUT.
+#       Writes the response body to OUTDIR/body and
+#       "status<TAB>content-type<TAB>curl-exit" to OUTDIR/meta; exit 28 is a
+#       timeout (Net::OpenTimeout / Net::ReadTimeout).
+set -u
+cmd=$1; shift
+
+case "$cmd" in
+  post)
+    url=$1; body=$2; timeout=$3; out=$4
+    mkdir -p "$out"
+    meta=$(curl --silent --show-error --globoff --compressed \
+      --connect-timeout "$timeout" --max-time "$timeout" \
+      -X POST --data-binary "@$body" \
+      -H "Content-Type: application/json" \
+      -H "Accept-Encoding: gzip;q=1.0,deflate;q=0.6,identity;q=0.3" \
+      -H "Accept: */*" -H "User-Agent: Ruby" \
+      -o "$out/body" -w '%{http_code}\t%{content_type}' \
+      "$url" 2> "$out/error")
+    status=$?
+    printf '%s\t%s\n' "$meta" "$status" > "$out/meta"
+    ;;
+esac
