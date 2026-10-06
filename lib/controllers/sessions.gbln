@@ -8,21 +8,21 @@ import lib/views/sessions as session_views
 
 act render_new(c, status)
     p | layout::page("Sign in")
-    :update!(p["head"], "<meta name=\"turbo-visit-control\" content=\"reload\">")
-    :update!(p["main"], session_views::new_main(c, http::param(c["req"], "email_address")))
+    :update!(p{"head"}, "<meta name=\"turbo-visit-control\" content=\"reload\">")
+    :update!(p{"main"}, session_views::new_main(c, http::param(c{"req"}, "email_address")))
     return http::response(status, layout::render(c, p))
 xx
 
 /// GET /session/new
 act new(c)
     any | db::value("select count(*)::int as n from users", [])
-    if any == 0 => return http::redirect(c["req"], "/first_run")
+    if any == 0 => return http::redirect(c{"req"}, "/first_run")
     return render_new(c, 200)
 xx
 
 /// POST /session
 act create(c)
-    req | c["req"]
+    req | c{"req"}
     email | http::param(req, "email_address")
     password | http::param(req, "password")
     user | db::one("select id from users where status = 0 and email_address = $1 and password_digest is not null and crypt($2, password_digest) = password_digest", [email, password])
@@ -30,7 +30,7 @@ act create(c)
         c |= auth::flash_now(c, "alert", "Too many requests or unauthorized.")
         return auth::keep(c, render_new(c, 401))
     xx
-    c |= auth::start_session(c, user["id"])
+    c |= auth::start_session(c, user{"id"})
     back | http::cookie_of(req, "return_to")
     res | http::redirect(req, "/")
     if back != ""
@@ -42,10 +42,10 @@ xx
 
 /// DELETE /session
 act destroy(c)
-    req | c["req"]
+    req | c{"req"}
     endpoint | http::param(req, "push_subscription_endpoint")
     if endpoint != ""
-        db::exec("delete from push_subscriptions where endpoint = $1 and user_id = $2", [endpoint, c["user"]["id"]])
+        db::exec("delete from push_subscriptions where endpoint = $1 and user_id = $2", [endpoint, c{"user"}{"id"}])
     xx
     res | http::redirect(req, "/")
     return auth::terminate_session(c, res)

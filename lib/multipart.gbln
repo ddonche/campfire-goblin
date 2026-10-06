@@ -30,7 +30,7 @@ act storage_cmd(args)
     xx
     /// run_cmd answers with a JSON document, not a map
     r | :json_parse(:run_cmd("bash " + shq(root() + "/bin/storage") + " " + :join(quoted, " ")))
-    return r["ok"]
+    return r{"ok"}
 xx
 
 /// The boundary parameter of a multipart Content-Type
@@ -71,7 +71,7 @@ act parse(file, ctype)
     b | boundary(ctype)
     if b == "" => return out
     dir | file + ".parts"
-    :update!(out["dir"], dir)
+    :update!(out{"dir"}, dir)
     if storage_cmd(["split", file, b, dir]) == false => return out
     /// Each part's index, as a list, so the walk is a for loop: declaring a
     /// local inside a while body trips a Goblin internal error ("const table
@@ -108,23 +108,23 @@ act parse(file, ctype)
             if has_file
                 /// Rack drops a file field submitted with no file chosen
                 if filename != ""
-                    :update!(files[name], {"filename": filename, "content_type": ptype, "path": body_path})
-                    :update!(params[name], filename)
+                    :update!(files{name}, {"filename": filename, "content_type": ptype, "path": body_path})
+                    :update!(params{name}, filename)
                 xx
             else
                 value | :read_text(body_path)
                 if :ends_with(name, "[]")
                     list | []
-                    if :has(params, name) => list |= params[name]
+                    if :has(params, name) => list |= params{name}
                     :put_last!(list, value)
-                    :update!(params[name], list)
+                    :update!(params{name}, list)
                 else
-                    :update!(params[name], value)
+                    :update!(params{name}, value)
                 xx
             xx
         xx
     xx
-    :update!(out["params"], params)
-    :update!(out["files"], files)
+    :update!(out{"params"}, params)
+    :update!(out{"files"}, files)
     return out
 xx

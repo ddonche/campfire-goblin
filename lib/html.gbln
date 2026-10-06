@@ -60,10 +60,10 @@ xx
 
 /// Room#to_key for STI rooms: rooms_open_1, rooms_closed_1, rooms_direct_1
 act room_key(room)
-    t | room["type"]
-    if t == "Rooms::Open" => return "rooms_open_" + :str(room["id"])
-    if t == "Rooms::Closed" => return "rooms_closed_" + :str(room["id"])
-    return "rooms_direct_" + :str(room["id"])
+    t | room{"type"}
+    if t == "Rooms::Open" => return "rooms_open_" + :str(room{"id"})
+    if t == "Rooms::Closed" => return "rooms_closed_" + :str(room{"id"})
+    return "rooms_direct_" + :str(room{"id"})
 xx
 
 /// Array#to_sentence
@@ -109,7 +109,7 @@ TRANSLATIONS | {
 act translation_button(key)
     globe | img("globe.svg", "aria-hidden=\"true\" class=\"color-icon\" ", 20)
     list | ""
-    texts | TRANSLATIONS[key]
+    texts | TRANSLATIONS{key}
     i | 0
     for flag in FLAGS
         t | h(texts[i])
@@ -123,14 +123,14 @@ xx
 
 /// avatar_tag(user): link to the profile wrapping the avatar image.
 act avatar_tag(user, extra)
-    id | user["id"]
-    title | h(user["title"])
-    src | user["avatar"]
+    id | user{"id"}
+    title | h(user{"title"})
+    src | user{"avatar"}
     return "<a title=\"{title}\" class=\"btn avatar\" data-turbo-frame=\"_top\" href=\"/users/{id}\"><img aria-hidden=\"true\" {extra}src=\"{src}\" width=\"48\" height=\"48\" /></a>"
 xx
 
 act account_logo_tag(account, style)
-    v | account["v"]
+    v | account{"v"}
     return "<figure class=\"account-logo avatar {style}\"><img alt=\"Account logo\" src=\"/account/logo?v={v}\" width=\"300\" height=\"300\" /></figure>"
 xx
 

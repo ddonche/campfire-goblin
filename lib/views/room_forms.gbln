@@ -50,8 +50,8 @@ act type_switch(path, checked, label)
 xx
 
 act user_head(u)
-    value | html::h(:lower(u["name"]))
-    name | html::h(u["name"])
+    value | html::h(:lower(u{"name"}))
+    name | html::h(u{"name"})
     avatar | html::avatar_tag(u, "loading=\"lazy\" ")
     return """<li class="flex align-center gap margin-none" data-value="{value}">
   <figure class="avatar flex-item-no-shrink" style="--avatar-size: 4ch;">
@@ -81,14 +81,14 @@ xx
 /// rooms/closeds/_user
 act closed_user(c, u, admin, is_new, selected)
     out | user_head(u)
-    id | u["id"]
+    id | u{"id"}
     if admin
-        if is_new and id == c["user"]["id"]
+        if is_new and id == c{"user"}{"id"}
             out |= out + "      <input type=\"hidden\" name=\"user_ids[]\" value=\"{id}\" />\n" + check_img("      ")
         else
             check | ""
             if selected => check |= " checked=\"checked\""
-            name | html::h(u["name"])
+            name | html::h(u{"name"})
             out |= out + """      <label class="switch flex-item-no-shrink">
         <input type="checkbox" name="user_ids[]" value="{id}" class="switch__input"{check} />
         <span class="switch__btn round"></span>
@@ -141,7 +141,7 @@ xx
 
 /// rooms/layouts/_form: `url` is the form's URL, `room` nil for a new room.
 act form(c, room, name, url, admin, access)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     method | ""
     if room != nil => method |= "<input type=\"hidden\" name=\"_method\" value=\"patch\" />"
     head | ""
@@ -188,19 +188,19 @@ xx
 
 /// button_to_delete_room(room, url:)
 act delete_room_button(c, room, url)
-    label | html::h(room["name"])
-    display | html::h(message_views::room_name(room, c["user"]["id"]))
+    label | html::h(room{"name"})
+    display | html::h(message_views::room_name(room, c{"user"}{"id"}))
     trash | html::img("trash.svg", "aria-hidden=\"true\" ", 20)
     inner | trash + "<span class=\"overflow-ellipsis\">{display}</span>"
-    return html::button_to(url, "delete", "", " class=\"btn btn--negative max-width\" aria-label=\"Delete {label}\" data-turbo-confirm=\"Are you sure you want to delete this room and all messages in it? This can’t be undone.\"", inner, c["csrf"])
+    return html::button_to(url, "delete", "", " class=\"btn btn--negative max-width\" aria-label=\"Delete {label}\" data-turbo-confirm=\"Are you sure you want to delete this room and all messages in it? This can’t be undone.\"", inner, c{"csrf"})
 xx
 
 /// rooms/layouts/_edit
 act edit_layout(c, room, admin, inner)
-    id | room["id"]
+    id | room{"id"}
     out | "\n\n<section class=\"panel txt-align-center\" style=\"view-transition-name: edit-room-{id}\">\n  \n  " + inner + "\n\n</section>\n\n"
     if admin
-        button | delete_room_button(c, room, c["req"]["base"] + "/rooms/" + :str(id))
+        button | delete_room_button(c, room, c{"req"}{"base"} + "/rooms/" + :str(id))
         out |= out + "  <section class=\"panel txt-align-center\">\n    " + button + "\n  </section>\n"
     xx
     return out
@@ -225,7 +225,7 @@ xx
 
 /// rooms/directs/new
 act direct_new(c)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     arrow | html::img("arrow-left.svg", "aria-hidden=\"true\" ", 0)
     check | html::img("check.svg", "aria-hidden=\"true\" ", 0)
     template | autocompletable_template()
@@ -262,7 +262,7 @@ act direct_edit(c, room, users)
     members | ""
     for u in users
         avatar | html::avatar_tag(u, "loading=\"lazy\" ")
-        name | html::h(u["name"])
+        name | html::h(u{"name"})
         members |= members + """      <div class="member flex flex-column gap fill-shade pad border-radius">
         <figure class="avatar center" style="--avatar-border-radius: 10ch; --avatar-size: 10ch;" >
           {avatar}
@@ -273,7 +273,7 @@ act direct_edit(c, room, users)
 """
     xx
     trash | html::img("trash.svg", "aria-hidden=\"true\" ", 0)
-    url | c["req"]["base"] + "/rooms/directs/" + :str(room["id"])
-    button | html::button_to(url, "delete", "", " class=\"btn btn--negative center\" aria-label=\"Delete Ping\" data-turbo-confirm=\"Are you sure you want to delete this ping and all messages in it? This can’t be undone.\"", "\n    {trash}\n    Ping\n", c["csrf"])
+    url | c{"req"}{"base"} + "/rooms/directs/" + :str(room{"id"})
+    button | html::button_to(url, "delete", "", " class=\"btn btn--negative center\" aria-label=\"Delete Ping\" data-turbo-confirm=\"Are you sure you want to delete this ping and all messages in it? This can’t be undone.\"", "\n    {trash}\n    Ping\n", c{"csrf"})
     return "\n\n<div class=\"panel txt-align-center\">\n  <section class=\"directs--edit margin-block-end\">\n" + members + "  </section>\n\n  " + button + "</div>\n"
 xx

@@ -10,39 +10,39 @@ REACTIONS | [["👍", "Thumbs up"], ["👏", "Clapping"], ["👋", "Waving hand"
 
 /// Message#to_key is [client_message_id], so dom ids use it.
 act dom(m, prefix)
-    key | m["client_message_id"]
+    key | m{"client_message_id"}
     if prefix == "" => return "message_" + key
     return prefix + "_message_" + key
 xx
 
 /// room_display_name(room, for_user:)
 act room_name(room, for_user_id)
-    if room["type"] != "Rooms::Direct" => return room["name"]
+    if room{"type"} != "Rooms::Direct" => return room{"name"}
     names | []
-    for u in room["members"]
-        if u["id"] != for_user_id => :put_last!(names, u["name"])
+    for u in room{"members"}
+        if u{"id"} != for_user_id => :put_last!(names, u{"name"})
     xx
     s | html::to_sentence(names, " and ")
     if s == "" and for_user_id != nil
-        for u in room["members"]
-            if u["id"] == for_user_id => s |= u["name"]
+        for u in room{"members"}
+            if u{"id"} == for_user_id => s |= u{"name"}
         xx
     xx
     return s
 xx
 
 act boost(c, b, message_id)
-    booster | b["booster"]
-    bid | b["id"]
-    booster_id | booster["id"]
-    btitle | html::h(booster["title"])
-    bavatar | booster["avatar"]
-    label | html::h(booster["name"] + " boosted " + b["content"])
-    text | html::h(b["content"])
+    booster | b{"booster"}
+    bid | b{"id"}
+    booster_id | booster{"id"}
+    btitle | html::h(booster{"title"})
+    bavatar | booster{"avatar"}
+    label | html::h(booster{"name"} + " boosted " + b{"content"})
+    text | html::h(b{"content"})
     klass | "txt-small"
-    if content::all_emoji(b["content"]) => klass |= "txt-small txt-medium"
+    if content::all_emoji(b{"content"}) => klass |= "txt-small txt-medium"
     minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     return """  <div id="boost_{bid}"
       class="boost boost-item flex-inline postion--relative max-width align-center fill-white gap"
       data-controller="boost-delete" data-boost-delete-perform-class="boost--deleting" data-boost-delete-reveal-class="expanded" data-boost-delete-booster-id-value="{booster_id}">
@@ -64,9 +64,9 @@ act boosts(c, m)
     boosting | dom(m, "boosting")
     boosts_id | dom(m, "boosts")
     new_boost | dom(m, "new_boost")
-    id | m["id"]
+    id | m{"id"}
     list | ""
-    for b in m["boosts"]
+    for b in m{"boosts"}
         list |= list + boost(c, b, id)
     xx
     icon | html::img("boost.svg", "aria-hidden=\"true\" ", 20)
@@ -101,9 +101,9 @@ act actions(c, m, url)
     boosting | dom(m, "boosting")
     new_boost | dom(m, "new_boost")
     edit | dom(m, "edit")
-    id | m["id"]
-    room_id | m["room_id"]
-    token | html::hidden_token(c["csrf"])
+    id | m{"id"}
+    room_id | m{"room_id"}
+    token | html::hidden_token(c{"csrf"})
     dots | html::img("menu-dots-horizontal.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
     forms | []
     for r in REACTIONS
@@ -119,13 +119,13 @@ act actions(c, m, url)
     quick | :join(forms, "          ")
     boost_icon | html::img("boost.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
     grid | ""
-    att | m["attachment"]
+    att | m{"attachment"}
     if att != nil
         download | html::img("download.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
         share | html::img("share.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 20)
         dl | html::h(storage::blob_path(att, "attachment"))
         sp | html::h(storage::blob_path(att, ""))
-        fname | html::h(att["filename"])
+        fname | html::h(att{"filename"})
         grid |= """          <a class="btn message__action-btn center full-width hide-in-ios-pwa" title="Download" aria-label="Download" href="{dl}">
             {download}
 </a>
@@ -171,24 +171,24 @@ xx
 
 /// messages/_message (the inner part of the cache block)
 act message(c, m)
-    id | m["id"]
+    id | m{"id"}
     mid | dom(m, "")
     edit | dom(m, "edit")
-    creator | m["creator"]
-    creator_id | creator["id"]
-    room | m["room"]
-    room_id | room["id"]
+    creator | m{"creator"}
+    creator_id | creator{"id"}
+    room | m{"room"}
+    room_id | room{"id"}
     emoji | ""
     if content::all_emoji(content::plain_text(m)) => emoji |= "message--emoji"
-    ts | m["created_epoch"]
-    upd | m["updated_epoch"]
-    iso | m["created_iso"]
+    ts | m{"created_epoch"}
+    upd | m{"updated_epoch"}
+    iso | m{"created_iso"}
     avatar | html::avatar_tag(creator, "")
-    title | html::h(creator["title"])
-    name | html::h(creator["name"])
+    title | html::h(creator{"title"})
+    name | html::h(creator{"name"})
     permalink | "/rooms/{room_id}/@{id}"
     rname | html::h(room_name(room, nil))
-    base | c["req"]["base"]
+    base | c{"req"}{"base"}
     acts | actions(c, m, base + permalink)
     pres | presentation(c, m)
     bst | boosts(c, m)
@@ -232,10 +232,10 @@ xx
 
 /// messages/_template (the client-side template for pending messages)
 act template(c)
-    u | c["user"]
-    uid | u["id"]
+    u | c{"user"}
+    uid | u{"id"}
     avatar | html::avatar_tag(u, "")
-    name | html::h(u["name"])
+    name | html::h(u{"name"})
     dots | html::img("menu-dots-horizontal.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 0)
     return """<script type="text/template" data-messages-target="template">
   <div class="message message--me $messageClasses$"
@@ -297,19 +297,19 @@ xx
 
 /// users/_user.json
 act user_json(c, u)
-    return ojson::object([["id", u["id"]], ["name", u["name"]], ["role", ROLE_NAMES[u["role"]]], ["avatar_url", c["req"]["base"] + u["avatar"]]])
+    return ojson::object([["id", u{"id"}], ["name", u{"name"}], ["role", ROLE_NAMES[u{"role"}]], ["avatar_url", c{"req"}{"base"} + u{"avatar"}]])
 xx
 
 /// messages/_message.json
 act to_json(c, m)
-    room_id | m["room_id"]
-    id | m["id"]
+    room_id | m{"room_id"}
+    id | m{"id"}
     return ojson::object([
         ["id", id],
-        ["created_at", json_time(m["created_iso"], m["created_epoch"])],
+        ["created_at", json_time(m{"created_iso"}, m{"created_epoch"})],
         ["body", ojson::object([["plain_text", content::plain_text_body(m)], ["html", content::rich_text(c, m)]])],
-        ["creator", user_json(c, m["creator"])],
+        ["creator", user_json(c, m{"creator"})],
         ["room", ojson::object([["id", room_id]])],
-        ["url", c["req"]["base"] + "/rooms/{room_id}/messages/{id}"]
+        ["url", c{"req"}{"base"} + "/rooms/{room_id}/messages/{id}"]
     ])
 xx

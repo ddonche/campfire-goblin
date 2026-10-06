@@ -8,22 +8,22 @@ import lib/views/pwa as pwa
 
 /// link_back: the referrer, unless there is none or it is this page.
 act link_back(c)
-    req | c["req"]
+    req | c{"req"}
     back | http_header_referrer(req)
-    if back == "" or back == req["base"] + req["path"] + query_suffix(req) => back |= "/"
+    if back == "" or back == req{"base"} + req{"path"} + query_suffix(req) => back |= "/"
     arrow | html::img("arrow-left.svg", "aria-hidden=\"true\" ", 20)
     href | html::h(back)
     return "<a class=\"btn\" href=\"{href}\">{arrow}<span class=\"for-screen-reader\">Go Back</span></a>"
 xx
 
 act http_header_referrer(req)
-    if :has(req, "referrer") => return req["referrer"]
+    if :has(req, "referrer") => return req{"referrer"}
     return ""
 xx
 
 act query_suffix(req)
-    if req["query"] == "" => return ""
-    return "?" + req["query"]
+    if req{"query"} == "" => return ""
+    return "?" + req{"query"}
 xx
 
 /// users/profiles/_transfer
@@ -32,7 +32,7 @@ act transfer(c, user, url, qr_id)
     arrows | html::img("transfer.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 36)
     phone | html::img("mobile-phone.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 36)
     label | ""
-    if c["user"]["id"] != user["id"]
+    if c{"user"}{"id"} != user{"id"}
         crown | html::img("crown.svg", "aria-hidden=\"true\" class=\"flex-item-no-shrink colorize--black\" ", 16)
         label |= """      <div class="flex align-center gap justify-center">
         {crown}
@@ -78,22 +78,22 @@ xx
 
 /// users/_ban_button
 act ban_button(c, user)
-    id | user["id"]
-    name | html::h(user["name"])
+    id | user{"id"}
+    name | html::h(user{"name"})
     cancel_img | ""
-    if user["status"] == 0
+    if user{"status"} == 0
         cancel_img |= html::img("cancel.svg", "aria-hidden=\"true\" aria-label=\"Ban {name}\" ", 0)
-        return "  " + html::button_to("/users/{id}/ban", "post", "", " class=\"btn full-width\" data-turbo-confirm=\"Are you sure you want to ban this user? This will log them out, delete their messages, and block their IP addresses.\"", "\n    {cancel_img}\n    <span>Ban {name}</span>\n", c["csrf"])
+        return "  " + html::button_to("/users/{id}/ban", "post", "", " class=\"btn full-width\" data-turbo-confirm=\"Are you sure you want to ban this user? This will log them out, delete their messages, and block their IP addresses.\"", "\n    {cancel_img}\n    <span>Ban {name}</span>\n", c{"csrf"})
     xx
     cancel_img |= html::img("cancel.svg", "aria-hidden=\"true\" aria-label=\"Remove Ban {name}\" ", 0)
-    return "  " + html::button_to("/users/{id}/ban", "delete", "", " class=\"btn btn--negative full-width\" data-turbo-confirm=\"Are you sure you want to remove the ban on this user?\"", "\n    {cancel_img}\n    <span>Remove ban</span>\n", c["csrf"])
+    return "  " + html::button_to("/users/{id}/ban", "delete", "", " class=\"btn btn--negative full-width\" data-turbo-confirm=\"Are you sure you want to remove the ban on this user?\"", "\n    {cancel_img}\n    <span>Remove ban</span>\n", c{"csrf"})
 xx
 
 /// users/show's nav
 act show_nav(c, user)
     back | link_back(c)
     edit | ""
-    if c["user"]["id"] == user["id"]
+    if c{"user"}{"id"} == user{"id"}
         pencil | html::img("pencil.svg", "aria-hidden=\"true\" ", 0)
         edit |= "      <a class=\"btn\" href=\"/users/me/profile\">\n        {pencil}\n        <span class=\"for-screen-reader\">Edit my profile</span>\n</a>"
     xx
@@ -102,21 +102,21 @@ xx
 
 /// users/show; `data` carries the user, its transfer URL and QR code id.
 act show(c, data)
-    user | data["user"]
-    me | c["user"]
-    admin | me["role"] == 1
-    id | user["id"]
-    name | html::h(user["name"])
-    status | user["status"]
+    user | data{"user"}
+    me | c{"user"}
+    admin | me{"role"} == 1
+    id | user{"id"}
+    name | html::h(user{"name"})
+    status | user{"status"}
     banned | ""
     if status == 2 => banned |= "banned"
-    avatar | html::img_src(user["avatar"], "alt=\"Profile avatar\" class=\"avatar\" ", 0)
+    avatar | html::img_src(user{"avatar"}, "alt=\"Profile avatar\" class=\"avatar\" ", 0)
     out | "\n\n<section class=\"panel txt-align-center\">\n  <div class=\"flex flex-column gap {banned}\">\n    <div class=\"avatar txt-xx-large center\" style=\"background: white\">\n      {avatar}\n    </div>\n\n"
-    if user["role"] == 2
+    if user{"role"} == 2
         out |= out + "      <div class=\"pad-double--inline push--inline push--block-start\">\n"
         if status == 0
             msg | html::img("messages.svg", "", 0)
-            out |= out + "          " + html::button_to("/rooms/directs?user_ids%5B%5D={id}", "post", "", " class=\"btn btn--primary full-width txt--large\"", msg, c["csrf"]) + "\n"
+            out |= out + "          " + html::button_to("/rooms/directs?user_ids%5B%5D={id}", "post", "", " class=\"btn btn--primary full-width txt--large\"", msg, c{"csrf"}) + "\n"
         else
             out |= out + "          <div>{name} is no longer on this account</div>\n"
         xx
@@ -124,21 +124,21 @@ act show(c, data)
     elif status != 1
         out |= out + "        <div class=\"flex flex-column gap\" style=\"--row-gap: calc(var(--block-space) / 3)\">\n          <h1 class=\"txt-x-large txt-tight-lines margin-none\">{name}</h1>\n"
         if admin
-            email | html::h(user["email_address"])
+            email | html::h(user{"email_address"})
             out |= out + "            <div><a href=\"mailto:{email}\">{email}</a></div>\n"
         xx
         bio | ""
-        if user["bio"] != nil => bio |= html::h(user["bio"])
+        if user{"bio"} != nil => bio |= html::h(user{"bio"})
         out |= out + "          <div>{bio}</div>\n        </div>\n\n"
         if status == 0
             msg | html::img("messages.svg", "aria-hidden=\"true\" aria-label=\"Ping {name}\" ", 0)
-            out |= out + "          <div class=\"pad-inline-double margin-inline margin-block-start\">\n            " + html::button_to("/rooms/directs?user_ids%5B%5D={id}", "post", "", " class=\"btn btn--reversed full-width txt-large\"", "\n              {msg}\n", c["csrf"]) + "          </div>\n\n"
+            out |= out + "          <div class=\"pad-inline-double margin-inline margin-block-start\">\n            " + html::button_to("/rooms/directs?user_ids%5B%5D={id}", "post", "", " class=\"btn btn--reversed full-width txt-large\"", "\n              {msg}\n", c{"csrf"}) + "          </div>\n\n"
             if admin
-                out |= out + "            <hr class=\"margin-block-start borderless\">\n\n            " + transfer(c, user, data["transfer_url"], data["qr_id"]) + "\n"
+                out |= out + "            <hr class=\"margin-block-start borderless\">\n\n            " + transfer(c, user, data{"transfer_url"}, data{"qr_id"}) + "\n"
             xx
         xx
         out |= out + "\n"
-        if admin and me["id"] != id
+        if admin and me{"id"} != id
             out |= out + "          <div class=\"margin-block-start\">\n            " + ban_button(c, user) + "\n          </div>\n"
         xx
     else
@@ -149,16 +149,16 @@ xx
 
 /// users/_mention
 act mention(u)
-    sgid | u["sgid"]
+    sgid | u{"sgid"}
     avatar | html::avatar_tag(u, "")
-    name | html::h(u["name"])
+    name | html::h(u{"name"})
     return "<span class=\"mention\" sgid=\"{sgid}\">{avatar} {name}</span>"
 xx
 
 /// autocompletable/users/_prompt_item
 act prompt_item(u)
-    name | html::h(u["name"])
-    sgid | u["sgid"]
+    name | html::h(u{"name"})
+    sgid | u{"sgid"}
     avatar | html::avatar_tag(u, "")
     m | mention(u)
     return """<lexxy-prompt-item search="{name}" sgid="{sgid}">
@@ -180,7 +180,7 @@ xx
 
 act profile_nav(c)
     back | link_back(c)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     logout | html::img("logout.svg", "aria-hidden=\"true\" ", 0)
     return """  <div class="flex-item-justify-start">
     {back}
@@ -201,7 +201,7 @@ xx
 /// profile_form_with: `attrs` go before data-controller, `multipart` adds
 /// the enctype a file field brings.
 act profile_form_open(c, attrs, multipart)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     enc | ""
     if multipart => enc |= " enctype=\"multipart/form-data\""
     return "<form {attrs}data-controller=\"form\"{enc} action=\"/users/me/profile\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hidden\" name=\"_method\" value=\"patch\" />{token}"
@@ -213,10 +213,10 @@ xx
 
 /// users/profiles/_membership
 act profile_membership(c, mb)
-    id | mb["room_id"]
-    name | html::h(mb["display_name"])
-    key | html::room_key({"id": id, "type": mb["type"]})
-    button | mb["button"]
+    id | mb{"room_id"}
+    name | html::h(mb{"display_name"})
+    key | html::room_key({"id": id, "type": mb{"type"}})
+    button | mb{"button"}
     return """<li class="flex align-center gap margin-none min-width membership-item">
   <a class="overflow-ellipsis fill-shade txt-primary txt-undecorated" href="/rooms/{id}">
     <strong>{name}</strong>
@@ -233,32 +233,32 @@ xx
 
 /// users/profiles/show
 act profile(c, data, shared, directs)
-    user | data["user"]
-    id | user["id"]
-    install | pwa::install_instructions(platform::parse(c["req"]["user_agent"]))
+    user | data{"user"}
+    id | user{"id"}
+    install | pwa::install_instructions(platform::parse(c{"req"}{"user_agent"}))
     camera | html::img("camera.svg", "aria-hidden=\"true\" ", 20)
     file | avatar_file_field()
     form1 | profile_form_open(c, "class=\"txt-medium\" ", true)
     form2 | profile_form_open(c, "", true)
     form3 | profile_form_open(c, "", false)
-    avatar | html::img_src(user["avatar"], "aria-hidden=\"true\" data-upload-preview-target=\"image\" ", 300)
+    avatar | html::img_src(user{"avatar"}, "aria-hidden=\"true\" data-upload-preview-target=\"image\" ", 300)
     delete_avatar | ""
-    if data["has_avatar"]
+    if data{"has_avatar"}
         minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
-        delete_avatar |= "      " + html::button_to("/users/{id}/avatar", "delete", "", " class=\"btn btn--negative txt-small avatar__delete-btn\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete avatar</span>\n", c["csrf"])
+        delete_avatar |= "      " + html::button_to("/users/{id}/avatar", "delete", "", " class=\"btn btn--negative txt-small avatar__delete-btn\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete avatar</span>\n", c{"csrf"})
     xx
     tr_name | html::translation_button("user_name")
     tr_email | html::translation_button("email_address")
     tr_password | html::translation_button("update_password")
     tr_bio | html::translation_button("bio")
-    name | html::h(user["name"])
+    name | html::h(user{"name"})
     email_value | ""
-    if user["email_address"] != nil
-        ev | html::h(user["email_address"])
+    if user{"email_address"} != nil
+        ev | html::h(user{"email_address"})
         email_value |= " value=\"{ev}\""
     xx
     bio | ""
-    if user["bio"] != nil => bio |= html::h(user["bio"])
+    if user{"bio"} != nil => bio |= html::h(user{"bio"})
     person | html::img("person.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
     email_img | html::img("email.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
     password_img | html::img("password.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 24)
@@ -276,7 +276,7 @@ act profile(c, data, shared, directs)
     for mb in directs
         list |= list + profile_membership(c, mb)
     xx
-    xfer | transfer(c, user, data["transfer_url"], data["qr_id"])
+    xfer | transfer(c, user, data{"transfer_url"}, data{"qr_id"})
     return """
 
 <section class="panel flex flex-column gap" style="view-transition-name: avatar-{id}">
@@ -387,15 +387,15 @@ xx
 
 /// users/push_subscriptions/_push_subscription
 act push_subscription(c, sub)
-    id | sub["id"]
-    agent | user_agent(sub["user_agent"])
-    label | html::h(agent["browser"] + " " + agent["version"] + " on " + agent["platform"])
+    id | sub{"id"}
+    agent | user_agent(sub{"user_agent"})
+    label | html::h(agent{"browser"} + " " + agent{"version"} + " on " + agent{"platform"})
     endpoint | ""
-    if sub["endpoint"] != nil => endpoint |= html::h(sub["endpoint"])
+    if sub{"endpoint"} != nil => endpoint |= html::h(sub{"endpoint"})
     bell | html::img("notification-bell-everything.svg", "aria-hidden=\"true\" ", 20)
     minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
-    test | html::button_to("/users/me/push_subscriptions/{id}/test_notifications", "post", "", " class=\"btn btn--reversed\"", "\n        {bell}\n        <span class=\"for-screen-reader\">Send test notification</span>\n", c["csrf"])
-    remove | html::button_to("/users/me/push_subscriptions/{id}", "delete", "", " class=\"btn btn--negative\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete subscription</span>\n", c["csrf"])
+    test | html::button_to("/users/me/push_subscriptions/{id}/test_notifications", "post", "", " class=\"btn btn--reversed\"", "\n        {bell}\n        <span class=\"for-screen-reader\">Send test notification</span>\n", c{"csrf"})
+    remove | html::button_to("/users/me/push_subscriptions/{id}", "delete", "", " class=\"btn btn--negative\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete subscription</span>\n", c{"csrf"})
     return """<li class="flex flex-column margin-none membership-item">
   <span class="overflow-ellipsis txt-primary txt-undecorated">
     <strong>{label}</strong><br>

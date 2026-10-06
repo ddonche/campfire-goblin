@@ -118,7 +118,7 @@ act decode_entities(s)
             nlen | :len(name)
             if semi => name |= name[0:nlen - 1]
             if :has(ENTITIES, name) and (semi or :has(["amp", "lt", "gt", "quot", "nbsp", "copy", "reg"], name))
-                out |= out + ENTITIES[name]
+                out |= out + ENTITIES{name}
             else
                 out |= out + tok
             xx
@@ -181,7 +181,7 @@ act tag_attrs(tag)
             xx
             v |= decode_entities(v)
         xx
-        if :has(attrs, k) == false => :update!(attrs[k], v)
+        if :has(attrs, k) == false => :update!(attrs{k}, v)
     xx
     return attrs
 xx
@@ -203,25 +203,25 @@ act opengraph_attributes(page)
     for tag in metas
         a | tag_attrs(tag)
         if :has(a, "charset") => has_charset |= true
-        if :has(a, "http-equiv") and :has(a, "content") and :is_matching(:lower(a["http-equiv"]), "^content-type$") and :is_matching(a["content"], "(?i)charset\\s*=\\s*[\\w-]+") => has_charset |= true
+        if :has(a, "http-equiv") and :has(a, "content") and :is_matching(:lower(a{"http-equiv"}), "^content-type$") and :is_matching(a{"content"}, "(?i)charset\\s*=\\s*[\\w-]+") => has_charset |= true
         prop | nil
-        if :has(a, "property") => prop |= a["property"]
+        if :has(a, "property") => prop |= a{"property"}
         nm | nil
-        if :has(a, "name") => nm |= a["name"]
+        if :has(a, "name") => nm |= a{"name"}
         selected | (prop != nil and :starts_with(prop, "og:")) or (nm != nil and :starts_with(nm, "og:"))
-        if selected and :has(a, "content") and blank(a["content"]) == false
+        if selected and :has(a, "content") and blank(a{"content"}) == false
             key | nm
             if prop != nil => key |= prop
             key |= :str(key)
             :update_where!(key, "og:", "")
-            if :has(ATTRIBUTES, key) => :update!(found[key], a["content"])
+            if :has(ATTRIBUTES, key) => :update!(found{key}, a{"content"})
         xx
     xx
     /// sanitize_content: without a declared encoding the content is
     /// re-encoded from binary, dropping every non-ASCII byte.
     if has_charset == false
         for k in :keys(found)
-            :update!(found[k], :update_matching(found[k], "[^\\x00-\\x7F]", ""))
+            :update!(found{k}, :update_matching(found{k}, "[^\\x00-\\x7F]", ""))
         xx
     xx
     return found
@@ -490,7 +490,7 @@ act request(method, u, ip)
     dir | scratch()
     for n in upto(MAX_REDIRECTS)
         out | dir + "/" + :str(n)
-        bin_net(["request", method, url["url"], url["bare_host"], :str(url["port"]), addr, out])
+        bin_net(["request", method, url{"url"}, url{"bare_host"}, :str(url{"port"}), addr, out])
         meta | :split(read_file(out + "/meta"), "\t")
         if :len(meta) < 2 or :str(meta[1]) != "0"
             :run_cmd("rm -rf " + multipart::shq(dir))
@@ -503,7 +503,7 @@ act request(method, u, ip)
                 :run_cmd("rm -rf " + multipart::shq(dir))
                 return nil
             xx
-            addr |= resolve(nxt["bare_host"])
+            addr |= resolve(nxt{"bare_host"})
             if addr == nil
                 :run_cmd("rm -rf " + multipart::shq(dir))
                 return nil
@@ -511,7 +511,7 @@ act request(method, u, ip)
             url |= nxt
         else
             res | {"status": status, "content_type": read_file(out + "/content_type"), "text": nil}
-            if method == "GET" and :file_exists(out + "/text") => :update!(res["text"], :read_text(out + "/text"))
+            if method == "GET" and :file_exists(out + "/text") => :update!(res{"text"}, :read_text(out + "/text"))
             :run_cmd("rm -rf " + multipart::shq(dir))
             return res
         xx
@@ -532,16 +532,16 @@ xx
 /// Fetch#fetch_document: the body of a 200 text/html response
 act fetch_document(u, ip)
     res | request("GET", u, ip)
-    if res == nil or res["status"] != 200 => return nil
-    if media_type(res["content_type"]) != "text/html" => return nil
-    return res["text"]
+    if res == nil or res{"status"} != 200 => return nil
+    if media_type(res{"content_type"}) != "text/html" => return nil
+    return res{"text"}
 xx
 
 /// Fetch#fetch_content_type: the Content-Type header of a HEAD
 act fetch_content_type(u, ip)
     res | request("HEAD", u, ip)
     if res == nil => return nil
-    return res["content_type"]
+    return res{"content_type"}
 xx
 
 /// ---------- Opengraph::Location ----------
@@ -553,7 +553,7 @@ FILES_AND_MEDIA | "\\bhttps?://\\S+\\.(?:zip|tar|tar\\.gz|tar\\.bz2|tar\\.xz|gz|
 act location(s)
     u | parse_url(s)
     if u == nil => return nil
-    ip | resolve(u["bare_host"])
+    ip | resolve(u{"bare_host"})
     if ip == nil => return nil
     return {"url": u, "ip": ip}
 xx
@@ -562,7 +562,7 @@ xx
 act read_html(s)
     loc | location(s)
     if loc == nil or :is_matching(s, FILES_AND_MEDIA) => return nil
-    return fetch_document(loc["url"], loc["ip"])
+    return fetch_document(loc{"url"}, loc{"ip"})
 xx
 
 /// ---------- Opengraph::Metadata::Fetching ----------
@@ -572,8 +572,8 @@ ALLOWED_IMAGE_CONTENT_TYPES | ["image/jpeg", "image/png", "image/gif", "image/we
 
 act tweet_url(s)
     u | parse_url(s)
-    if u == nil or :has(TWITTER_HOSTS, u["host"]) == false => return false
-    path | u["target"]
+    if u == nil or :has(TWITTER_HOSTS, u{"host"}) == false => return false
+    path | u{"target"}
     for ch in ["?", "#"]
         at | :find(path, ch)
         if at != nil => path |= path[0:at]
@@ -583,14 +583,14 @@ xx
 
 act fxtwitter_url(s)
     u | parse_url(s)
-    return u["scheme"] + "://" + u["userinfo"] + "fxtwitter.com" + u["port_part"] + u["target"]
+    return u{"scheme"} + "://" + u{"userinfo"} + "fxtwitter.com" + u{"port_part"} + u{"target"}
 xx
 
 act valid_image_content_type(image)
     if blank(image) => return nil
     loc | location(image)
     if loc == nil => return nil
-    t | fetch_content_type(loc["url"], loc["ip"])
+    t | fetch_content_type(loc{"url"}, loc{"ip"})
     if t == nil or :has(ALLOWED_IMAGE_CONTENT_TYPES, :lower(t)) == false => return nil
     return image
 xx
@@ -606,13 +606,13 @@ act from_url(url)
     xx
     attrs | opengraph_attributes(page)
     canonical | url
-    if :has(attrs, "url") and location(attrs["url"]) != nil => canonical |= attrs["url"]
+    if :has(attrs, "url") and location(attrs{"url"}) != nil => canonical |= attrs{"url"}
     image | nil
-    if :has(attrs, "image") => image |= valid_image_content_type(attrs["image"])
+    if :has(attrs, "image") => image |= valid_image_content_type(attrs{"image"})
     vals | {"url": canonical, "image": image, "title": nil, "description": nil}
-    if :has(attrs, "title") => :update!(vals["title"], strip_tags(attrs["title"]))
-    if :has(attrs, "description") => :update!(vals["description"], strip_tags(attrs["description"]))
-    if blank(vals["title"]) or blank(vals["url"]) or blank(vals["description"]) => return nil
+    if :has(attrs, "title") => :update!(vals{"title"}, strip_tags(attrs{"title"}))
+    if :has(attrs, "description") => :update!(vals{"description"}, strip_tags(attrs{"description"}))
+    if blank(vals{"title"}) or blank(vals{"url"}) or blank(vals{"description"}) => return nil
     /// as_json lists the instance variables in the order they were set:
     /// the document's attributes, then url and image, then the
     /// validation state
@@ -624,7 +624,7 @@ act from_url(url)
     if :has(attrs, "image") == false => :put_last!(order, "image")
     pairs | []
     for k in order
-        :put_last!(pairs, [k, vals[k]])
+        :put_last!(pairs, [k, vals{k}])
     xx
     :put_last!(pairs, ["context_for_validation", {"__ordered_pairs": [["context", nil]]}])
     :put_last!(pairs, ["errors", {}])

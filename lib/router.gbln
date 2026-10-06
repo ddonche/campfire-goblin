@@ -51,10 +51,10 @@ xx
 
 /// require_authentication's fallback: remember where to come back to.
 act request_authentication(c)
-    req | c["req"]
+    req | c{"req"}
     res | http::redirect(req, "/session/new")
-    url | req["base"] + req["path"]
-    if req["query"] != "" => url |= url + "?" + req["query"]
+    url | req{"base"} + req{"path"}
+    if req{"query"} != "" => url |= url + "?" + req{"query"}
     res |= http::add_cookie(res, "return_to", http::url_encode(url), "; path=/; httponly; samesite=lax")
     return res
 xx
@@ -74,9 +74,9 @@ act active_storage(c, s, n, m)
 xx
 
 act dispatch(c)
-    req | c["req"]
-    m | req["method"]
-    s | segments(req["path"])
+    req | c{"req"}
+    m | req{"method"}
+    s | segments(req{"path"})
     n | :len(s)
 
     /// Rails::HealthController -- outside ApplicationController.
@@ -88,21 +88,21 @@ act dispatch(c)
     /// origin check, outside ApplicationController's before_actions.
     if n == 1 and s[0] == "cable" and m == "POST" => return cable_endpoint::handle(c)
 
-    p | platform::parse(req["user_agent"])
+    p | platform::parse(req{"user_agent"})
     if platform::allowed(p) == false => return http::text(406, "Your browser is not supported. Please upgrade.")
 
     /// DiskController skips forgery protection: a direct upload's PUT
     if n >= 4 and s[0] == "rails" and s[1] == "active_storage" and s[2] == "disk" and m == "PUT"
         res | blobs::disk_update(c, s[3])
         ctx | c
-        :update!(ctx["new_csrf"], false)
-        :update!(res["context"], ctx)
+        :update!(ctx{"new_csrf"}, false)
+        :update!(res{"context"}, ctx)
         return res
     xx
 
     if m != "GET" and m != "HEAD"
         if auth::verified_request(c) == false => return http::error_page(422)
-        banned | db::value("select count(*)::int as n from bans where ip_address = $1", [req["ip"]])
+        banned | db::value("select count(*)::int as n from bans where ip_address = $1", [req{"ip"}])
         if banned > 0 => return http::head(429)
     xx
 
@@ -127,8 +127,8 @@ act dispatch(c)
             /// no session or CSRF cookie: ActiveStorage::BaseController
             /// is not an ApplicationController
             ctx | c
-            :update!(ctx["new_csrf"], false)
-            :update!(res["context"], ctx)
+            :update!(ctx{"new_csrf"}, false)
+            :update!(res{"context"}, ctx)
             return res
         xx
     xx
@@ -144,7 +144,7 @@ act dispatch(c)
         if n == 6 and s[5] == "boosts" and m == "POST" => return bot_api::create_boost(c, s[1], s[4])
         if n == 7 and s[5] == "boosts" and m == "DELETE" => return bot_api::destroy_boost(c, s[1], s[4], s[6])
     xx
-    bot | c["authenticated_by"] == "bot_key"
+    bot | c{"authenticated_by"} == "bot_key"
     if bot => return forbidden()
 
     if n == 1 and s[0] == "session" and m == "DELETE" => return sessions::destroy(c)

@@ -22,13 +22,13 @@ xx
 
 /// rooms/_direct
 act direct(m)
-    room | m["room"]
-    id | room["id"]
-    members | room["others"]
-    if :len(members) == 0 => members |= [m["user"]]
+    room | m{"room"}
+    id | room{"id"}
+    members | room{"others"}
+    if :len(members) == 0 => members |= [m{"user"}]
     klass | "direct"
-    if m["unread"] => klass |= "direct unread"
-    num | room["updated_epoch"]
+    if m{"unread"} => klass |= "direct unread"
+    num | room{"updated_epoch"}
     body | ""
     label | ""
     if :len(members) > 1
@@ -37,18 +37,18 @@ act direct(m)
         names | []
         for u in members
             if n < 4
-                img | html::img_src(u["avatar"], "aria-hidden=\"true\" ", 20)
+                img | html::img_src(u{"avatar"}, "aria-hidden=\"true\" ", 20)
                 avatars |= avatars + "          <span class=\"avatar\">\n            {img}\n          </span>\n"
             xx
             n |= n + 1
-            :put_last!(names, html::h(initials(u["name"])))
+            :put_last!(names, html::h(initials(u{"name"})))
         xx
         body |= "      <div class=\"avatar__group\">\n" + avatars + "      </div>\n"
         label |= html::to_sentence(names, "+")
     else
-        img | html::img_src(members[0]["avatar"], "aria-hidden=\"true\" ", 48)
+        img | html::img_src(members[0]{"avatar"}, "aria-hidden=\"true\" ", 48)
         body |= "      <span class=\"avatar\">\n        {img}\n      </span>\n"
-        label |= html::h(first_name(members[0]["name"]))
+        label |= html::h(first_name(members[0]{"name"}))
     xx
     return """
   <a class="{klass}" id="list_rooms_direct_{id}" data-rooms-list-target="room" data-room-id="{id}" data-badge-dot-target="unread" data-sorted-list-target="item" data-sorted-list-number="{num}" href="/rooms/{id}">
@@ -64,9 +64,9 @@ xx
 
 /// rooms/_direct_placeholder
 act direct_placeholder(c, u)
-    id | u["id"]
-    img | html::img_src(u["avatar"], "aria-hidden=\"true\" ", 0)
-    name | html::h(first_name(u["name"]))
+    id | u{"id"}
+    img | html::img_src(u{"avatar"}, "aria-hidden=\"true\" ", 0)
+    name | html::h(first_name(u{"name"}))
     inner | """
   <span class="avatar">
     {img}
@@ -79,14 +79,14 @@ act direct_placeholder(c, u)
     </span>
   </span>
 """
-    return html::button_to("/rooms/directs?user_ids%5B%5D={id}", "post", "", " class=\"direct borderless fill-transparent unpad\"", inner, c["csrf"])
+    return html::button_to("/rooms/directs?user_ids%5B%5D={id}", "post", "", " class=\"direct borderless fill-transparent unpad\"", inner, c{"csrf"})
 xx
 
 /// rooms/_shared
 act shared(room, unread)
-    id | room["id"]
+    id | room{"id"}
     key | html::room_key(room)
-    name | html::h(room["name"])
+    name | html::h(room{"name"})
     klass | "align-center gap room btn txt-nowrap"
     if unread => klass |= klass + " unread"
     return """<a id="list_{key}" data-rooms-list-target="room" data-room-id="{id}" data-badge-dot-target="unread" data-sorted-list-target="item" data-sorted-list-name="{name}" style="--column-gap: 0.5em" class="{klass}" href="/rooms/{id}">
@@ -95,26 +95,26 @@ act shared(room, unread)
 xx
 
 act show(c, data)
-    rooms_stream | data["rooms_stream"]
-    user_stream | data["user_stream"]
+    rooms_stream | data{"rooms_stream"}
+    user_stream | data{"user_stream"}
     directs | ""
-    for m in data["directs"]
+    for m in data{"directs"}
         directs |= directs + direct(m)
     xx
     placeholders | ""
-    for u in data["placeholders"]
+    for u in data{"placeholders"}
         placeholders |= placeholders + direct_placeholder(c, u)
     xx
     shareds | ""
-    for m in data["others"]
-        shareds |= shareds + "          " + shared(m["room"], m["unread"]) + "\n"
+    for m in data{"others"}
+        shareds |= shareds + "          " + shared(m{"room"}, m{"unread"}) + "\n"
     xx
     new_room | ""
-    user | c["user"]
-    settings | c["account"]["settings"]
+    user | c{"user"}
+    settings | c{"account"}{"settings"}
     restricted | false
-    if settings != nil and :has(settings, "restrict_room_creation_to_administrators") => restricted |= settings["restrict_room_creation_to_administrators"] == true
-    if user["role"] == 1 or restricted == false
+    if settings != nil and :has(settings, "restrict_room_creation_to_administrators") => restricted |= settings{"restrict_room_creation_to_administrators"} == true
+    if user{"role"} == 1 or restricted == false
         add | html::img("add.svg", "aria-hidden=\"true\" style=\"view-transition-name: new-room\" ", 20)
         new_room |= """
         <a class="rooms__new-btn btn room align-center gap txt-reversed" aria-label="New Chat Room" href="/rooms/opens/new">
@@ -123,8 +123,8 @@ act show(c, data)
     xx
     msg_add | html::img("messages-add.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
     menu | html::img("menu.svg", "aria-hidden=\"true\" ", 20)
-    uid | user["id"]
-    me | html::img_src(user["avatar"], "aria-hidden=\"true\" style=\"view-transition-name: avatar-{uid}\" ", 48)
+    uid | user{"id"}
+    me | html::img_src(user{"avatar"}, "aria-hidden=\"true\" style=\"view-transition-name: avatar-{uid}\" ", 48)
     gear | html::img("settings.svg", "aria-hidden=\"true\" style=\"view-transition-name: account-settings\" ", 20)
     return """<turbo-frame data-turbo-permanent="true" data-controller="rooms-list read-rooms turbo-frame" data-rooms-list-unread-class="unread" data-action="presence:present@window->rooms-list#read read-rooms:read->rooms-list#read turbo:frame-load->rooms-list#loaded refresh-room:visible@window->turbo-frame#reload" id="user_sidebar" target="_top">
   <turbo-cable-stream-source channel="Turbo::StreamsChannel" signed-stream-name="{rooms_stream}"></turbo-cable-stream-source>

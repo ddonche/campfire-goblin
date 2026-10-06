@@ -31,7 +31,7 @@ act parse(ua)
     xx
     os | ""
     names | {"Android": "Android", "iPad": "iPad", "iPhone": "iPhone", "Macintosh": "macOS", "Windows": "Windows", "CrOS": "ChromeOS", "X11": "Linux", "Linux": "Linux"}
-    if platform != "" => os |= names[platform]
+    if platform != "" => os |= names{platform}
     return {
         "ua": ua,
         "browser": browser,
@@ -59,7 +59,7 @@ act first_match(s, pattern)
 xx
 
 act mobile(p)
-    return p["ios"] or p["android"]
+    return p{"ios"} or p{"android"}
 xx
 
 act desktop(p)
@@ -76,10 +76,10 @@ xx
 
 /// allow_browser versions: { safari: 17.2, chrome: 120, firefox: 121, opera: 104, ie: false }
 act allowed(p)
-    b | p["browser"]
-    n | version_number(p["version"])
+    b | p{"browser"}
+    n | version_number(p{"version"})
     if b == "Internet Explorer" => return false
-    if b == "Safari" and p["version"] != "" => return n >= 17.2
+    if b == "Safari" and p{"version"} != "" => return n >= 17.2
     if b == "Chrome" => return n >= 120
     if b == "Firefox" => return n >= 121
     if b == "Opera" => return n >= 104

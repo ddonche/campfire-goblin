@@ -63,7 +63,7 @@ xx
 
 /// first_runs/show
 act first_run(c)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     avatar | html::img("default-avatar.svg", "aria-hidden=\"true\" data-upload-preview-target=\"image\" alt=\"Add your avatar\" ", 0)
     tag | nametag("<legend class=\"txt-large txt-align-center\"><strong>Set up Campfire</strong></legend>", "Add your avatar", avatar, "arrow-right.svg")
     return "\n<form class=\"center max-width\" enctype=\"multipart/form-data\" action=\"/first_run\" accept-charset=\"UTF-8\" method=\"post\">" + token + tag + "</form>"
@@ -81,10 +81,10 @@ xx
 
 /// users/new
 act join(c, code)
-    token | html::hidden_token(c["csrf"])
-    account | c["account"]
+    token | html::hidden_token(c{"csrf"})
+    account | c{"account"}
     logo | html::account_logo_tag(account, "")
-    name | html::h(account["name"])
+    name | html::h(account{"name"})
     legend | """<legend class="txt-align-center flex gap">
           {logo}
           <strong class="txt-large">{name}</strong>
@@ -97,7 +97,7 @@ xx
 
 /// sessions/transfers/show
 act transfer(c, id)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     target | html::h(id)
     return "<form data-controller=\"auto-submit\" action=\"/session/transfers/{target}\" accept-charset=\"UTF-8\" method=\"post\"><input type=\"hidden\" name=\"_method\" value=\"put\" />{token}\n"
 xx

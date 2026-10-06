@@ -8,16 +8,16 @@ import lib/views/messages as message_views
 act recent_links(c, searches)
     out | ""
     for s in searches
-        q | html::h(s["query"])
-        href | "/searches?q=" + html::h(http_query(s["query"]))
+        q | html::h(s{"query"})
+        href | "/searches?q=" + html::h(http_query(s{"query"}))
         out |= out + "      <a class=\"align-center gap room btn txt-nowrap\" href=\"{href}\">\n        <span class=\"overflow-ellipsis\">“{q}”</span>\n</a>"
     xx
     out |= out + "\n"
     if :len(searches) > 0
         broom | html::img("broom.svg", "aria-hidden=\"true\" ", 0)
         inner | "\n        {broom}\n        <span class=\"for-screen-reader\">Clear recent searches</span>\n"
-        base | c["req"]["base"]
-        out |= out + "      " + html::button_to(base + "/searches/clear", "delete", "", " class=\"btn searches__btn\" data-turbo-confirm=\"Are you sure you want to clear your recent searches?\"", inner, c["csrf"])
+        base | c{"req"}{"base"}
+        out |= out + "      " + html::button_to(base + "/searches/clear", "delete", "", " class=\"btn searches__btn\" data-turbo-confirm=\"Are you sure you want to clear your recent searches?\"", inner, c{"csrf"})
     xx
     return out
 xx
@@ -72,7 +72,7 @@ act footer(c, return_room_id, raw_q)
     hint | html::img("search.svg", "aria-hidden=\"true\" class=\"composer__input-hint colorize--black\" style=\"view-transition-name: input-btn;\" ", 20)
     remove | html::img("remove.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 14)
     up | html::img("arrow-up.svg", "aria-hidden=\"true\" ", 0)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     value | ""
     if raw_q != nil => value |= "value=\"" + html::h(raw_q) + "\" "
     return """  <div class="composer flex align-end gap">

@@ -14,20 +14,20 @@ job_path | :env("JOB")
 if job_path != nil and job_path != "" and :file_exists(job_path)
     job | :json_parse(:read_text(job_path))
     :delete_path!(job_path)
-    m | db::doc("select campfire_message_json(m) from messages m where m.id = $1", [job["message_id"]])
-    req | {"method": "POST", "path": "/", "query": "", "params": {"bot_key": job["bot_key"]}, "files": {}, "parts_dir": "", "body": "", "content_type": "", "cookies": {}, "accept": "", "user_agent": "", "host": "example.org", "base": "http://example.org", "ip": "127.0.0.1", "turbo_frame": "", "referrer": "", "xhr": false}
+    m | db::doc("select campfire_message_json(m) from messages m where m.id = $1", [job{"message_id"}])
+    req | {"method": "POST", "path": "/", "query": "", "params": {"bot_key": job{"bot_key"}}, "files": {}, "parts_dir": "", "body": "", "content_type": "", "cookies": {}, "accept": "", "user_agent": "", "host": "example.org", "base": "http://example.org", "ip": "127.0.0.1", "turbo_frame": "", "referrer": "", "xhr": false}
     c | auth::context(req)
-    if m != nil and c["user"] != nil
+    if m != nil and c{"user"} != nil
         dir | job_path + ".d"
-        bot | {"name": c["user"]["name"], "bot_key": job["bot_key"]}
-        res | webhooks::post(job["url"], webhooks::payload(bot, m), dir)
+        bot | {"name": c{"user"}{"name"}, "bot_key": job{"bot_key"}}
+        res | webhooks::post(job{"url"}, webhooks::payload(bot, m), dir)
         reply | webhooks::reply_for(res)
-        room | db::one("select id, type from rooms where id = $1", [m["room_id"]])
+        room | db::one("select id, type from rooms where id = $1", [m{"room_id"}])
         if reply != nil and room != nil
             if :has(reply, "text")
-                messages::post(c, room, reply["text"], "")
+                messages::post(c, room, reply{"text"}, "")
             else
-                messages::post_with(c, room, nil, "", reply["upload"])
+                messages::post_with(c, room, nil, "", reply{"upload"})
             xx
         xx
         :run_cmd("rm -rf '" + dir + "' '" + dir + ".payload'")

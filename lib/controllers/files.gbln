@@ -14,7 +14,7 @@ xx
 
 /// GET /account/logo
 act logo(c)
-    req | c["req"]
+    req | c{"req"}
     small | http::param(req, "size") == "small"
     cache | "max-age=300, public, stale-while-revalidate=604800"
     variant | db::value("select campfire_logo_file($1) as v", [small])
@@ -34,10 +34,10 @@ act avatar(c, token)
     user | db::one("select u.id, u.name, u.role, campfire_crc32(u.id::text) % 18 as color, campfire_avatar_file(u.id) as variant from users u where u.id = campfire_user_from_avatar_token($1)", [token])
     if user == nil => return http::head(404)
     cache | "max-age=1800, public, stale-while-revalidate=604800"
-    if user["variant"] != nil => return http::send_file("/_send/storage/" + user["variant"], "image/webp", "avatar.webp", cache)
-    if user["role"] == 2 => return http::send_file(asset_file("default-bot-avatar.svg"), "image/svg+xml", "default-bot-avatar.svg", cache)
-    fill | AVATAR_COLORS[user["color"]]
-    letters | initials(user["name"])
+    if user{"variant"} != nil => return http::send_file("/_send/storage/" + user{"variant"}, "image/webp", "avatar.webp", cache)
+    if user{"role"} == 2 => return http::send_file(asset_file("default-bot-avatar.svg"), "image/svg+xml", "default-bot-avatar.svg", cache)
+    fill | AVATAR_COLORS[user{"color"}]
+    letters | initials(user{"name"})
     fit | ""
     if :len(letters) >= 3 => fit |= "textLength=\"85%\" lengthAdjust=\"spacingAndGlyphs\""
     letters |= html::h(letters)
@@ -64,7 +64,7 @@ act avatar(c, token)
   </g>
 </svg>
 """)
-    :update!(res["headers"]["Content-Type"], "image/svg+xml; charset=utf-8")
-    :update!(res["headers"]["Cache-Control"], cache)
+    :update!(res{"headers"}{"Content-Type"}, "image/svg+xml; charset=utf-8")
+    :update!(res{"headers"}{"Cache-Control"}, cache)
     return res
 xx

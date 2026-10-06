@@ -26,8 +26,8 @@ act show(c, id)
         if render(url, path) == false => return http::head(404)
     xx
     res | http::response(200, :read_text(path))
-    :update!(res["headers"]["Content-Type"], "image/svg+xml; charset=utf-8")
-    :update!(res["headers"]["Cache-Control"], "max-age=31556952, public")
+    :update!(res{"headers"}{"Content-Type"}, "image/svg+xml; charset=utf-8")
+    :update!(res{"headers"}{"Cache-Control"}, "max-age=31556952, public")
     return res
 xx
 
@@ -50,7 +50,7 @@ xx
 act render(url, path)
     root | multipart::root()
     r | :json_parse(:run_cmd("mkdir -p " + multipart::shq(root + "/" + CACHE) + " && QR_URL=" + multipart::shq(url) + " QR_OUT=" + multipart::shq(root + "/" + path) + " goblin run " + multipart::shq(root + "/lib/qrcode.gbln"), root))
-    if r["ok"] == false => return false
+    if r{"ok"} == false => return false
     if :file_exists(path) == false => return false
     if :len(:read_text(path)) == 0
         :delete_path!(path)

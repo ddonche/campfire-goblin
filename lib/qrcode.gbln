@@ -135,11 +135,11 @@ act gexp(n)
     while k >= 256
         k |= k - 255
     xx
-    return GF["exp"][k]
+    return GF{"exp"}[k]
 xx
 
 act glog(n)
-    return GF["log"][n]
+    return GF{"log"}[n]
 xx
 
 /// ---------- words_in ----------
@@ -584,8 +584,8 @@ xx
 act svg(text)
     code | encode(text)
     if code == nil => return nil
-    n | code["count"]
-    grid | code["rows"]
+    n | code{"count"}
+    grid | code{"rows"}
     size | 11
     border | 0
     dimension | (n + border * 2) * size

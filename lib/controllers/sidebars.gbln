@@ -42,8 +42,8 @@ select json_build_object(
 
 /// GET /users/me/sidebar
 act show(c)
-    data | db::doc(SIDEBAR_SQL, [c["user"]["id"], DIRECT_PLACEHOLDERS])
+    data | db::doc(SIDEBAR_SQL, [c{"user"}{"id"}, DIRECT_PLACEHOLDERS])
     p | layout::page("Campfire")
-    :update!(p["main"], sidebar_views::show(c, data))
+    :update!(p{"main"}, sidebar_views::show(c, data))
     return http::html(layout::render(c, p))
 xx

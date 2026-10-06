@@ -173,23 +173,23 @@ act encrypt(message, p256dh, auth)
     bin_push(["keys", p256dh, auth, dir])
     k | {}
     for name in ["salt", "server_key", "cek", "nonce", "h", "ej0"]
-        :update!(k[name], read_hex(dir + "/" + name))
+        :update!(k{name}, read_hex(dir + "/" + name))
     xx
     :run_cmd("rm -rf " + multipart::shq(dir))
     for name in ["salt", "server_key", "cek", "nonce", "h", "ej0"]
-        if k[name] == "" => return nil
+        if k{name} == "" => return nil
     xx
-    if :len(k["server_key"]) != 130 or :len(k["cek"]) != 32 => return nil
+    if :len(k{"server_key"}) != 130 or :len(k{"cek"}) != 32 => return nil
     /// the message, then the last-record delimiter and one byte of padding
     plain | to_hex(http::utf8_bytes(message)) + "0200"
     out | scratch()
-    bin_push(["ctr", k["cek"], k["nonce"], plain, out])
+    bin_push(["ctr", k{"cek"}, k{"nonce"}, plain, out])
     cipher_hex | read_hex(out)
     if :file_exists(out) => :delete_path!(out)
     if :len(cipher_hex) != :len(plain) => return nil
-    tag | gcm_tag(from_hex(k["h"]), from_hex(k["ej0"]), from_hex(cipher_hex))
+    tag | gcm_tag(from_hex(k{"h"}), from_hex(k{"ej0"}), from_hex(cipher_hex))
     rs | idiv(:len(cipher_hex), 2) + 16
-    return k["salt"] + to_hex(be_bytes(rs, 4)) + "41" + k["server_key"] + cipher_hex + to_hex(tag)
+    return k{"salt"} + to_hex(be_bytes(rs, 4)) + "41" + k{"server_key"} + cipher_hex + to_hex(tag)
 xx
 
 /// ---------- delivery ----------
@@ -204,14 +204,14 @@ xx
 /// at a permitted push service, resolved to a public address; else nil.
 act endpoint_ip(endpoint)
     u | opengraph::parse_url(endpoint)
-    if u == nil or u["scheme"] != "https" or u["port"] != 443 => return nil
-    host | :lower(u["bare_host"])
+    if u == nil or u{"scheme"} != "https" or u{"port"} != 443 => return nil
+    host | :lower(u{"bare_host"})
     permitted | false
     for p in PERMITTED_ENDPOINT_HOSTS
         if host == p or :ends_with(host, "." + p) => permitted |= true
     xx
     if permitted == false => return nil
-    return opengraph::resolve(u["bare_host"])
+    return opengraph::resolve(u{"bare_host"})
 xx
 
 /// WebPush::Notification#encoded_message
@@ -223,17 +223,17 @@ xx
 /// string ("" when the endpoint is not deliverable, "keys" when the
 /// subscription's keys are unusable).
 act deliver(sub, title, body, path)
-    ip | endpoint_ip(sub["endpoint"])
+    ip | endpoint_ip(sub{"endpoint"})
     if ip == nil => return ""
     /// blank or non-base64 keys raise ArgumentError, which the pool only logs
-    if opengraph::blank(sub["p256dh_key"]) or opengraph::blank(sub["auth_key"]) => return "invalid"
-    if :is_matching(sub["p256dh_key"], "^[A-Za-z0-9_-]+=*$") == false or :is_matching(sub["auth_key"], "^[A-Za-z0-9_-]+=*$") == false => return "invalid"
-    payload | encrypt(encoded_message(title, body, path, sub["badge"]), sub["p256dh_key"], sub["auth_key"])
+    if opengraph::blank(sub{"p256dh_key"}) or opengraph::blank(sub{"auth_key"}) => return "invalid"
+    if :is_matching(sub{"p256dh_key"}, "^[A-Za-z0-9_-]+=*$") == false or :is_matching(sub{"auth_key"}, "^[A-Za-z0-9_-]+=*$") == false => return "invalid"
+    payload | encrypt(encoded_message(title, body, path, sub{"badge"}), sub{"p256dh_key"}, sub{"auth_key"})
     if payload == nil => return "keys"
-    u | opengraph::parse_url(sub["endpoint"])
-    claims | "\{\"aud\":" + :json_stringify("https://" + u["bare_host"]) + ",\"exp\":" + :str(:int(db::value("select floor(extract(epoch from now()))::bigint + 43200 as v", []))) + ",\"sub\":\"mailto:support@37signals.com\"}"
+    u | opengraph::parse_url(sub{"endpoint"})
+    claims | "\{\"aud\":" + :json_stringify("https://" + u{"bare_host"}) + ",\"exp\":" + :str(:int(db::value("select floor(extract(epoch from now()))::bigint + 43200 as v", []))) + ",\"sub\":\"mailto:support@37signals.com\"}"
     out | scratch()
-    bin_push(["send", sub["endpoint"], u["bare_host"], ip, payload, "2419200", "high", claims, :env("VAPID_PRIVATE_KEY"), :env("VAPID_PUBLIC_KEY"), out])
+    bin_push(["send", sub{"endpoint"}, u{"bare_host"}, ip, payload, "2419200", "high", claims, :env("VAPID_PRIVATE_KEY"), :env("VAPID_PUBLIC_KEY"), out])
     status | read_hex(out)
     if :file_exists(out) => :delete_path!(out)
     return status
@@ -244,24 +244,24 @@ xx
 act notifications(message_id)
     m | db::doc("select campfire_message_json(m) from messages m where m.id = $1", [message_id])
     if m == nil => return nil
-    room | m["room"]
+    room | m{"room"}
     subs | db::doc("select campfire_push_subscriptions($1)", [message_id])
     plain | content::plain_text_body(m)
-    title | room["name"]
-    body | m["creator"]["name"] + ": " + plain
-    if room["type"] == "Rooms::Direct"
-        title |= m["creator"]["name"]
+    title | room{"name"}
+    body | m{"creator"}{"name"} + ": " + plain
+    if room{"type"} == "Rooms::Direct"
+        title |= m{"creator"}{"name"}
         body |= plain
     xx
-    return {"subscriptions": subs, "title": title, "body": body, "path": "/rooms/" + :str(room["id"])}
+    return {"subscriptions": subs, "title": title, "body": body, "path": "/rooms/" + :str(room{"id"})}
 xx
 
 /// Room#push_later, after a message is created
 act push_later(m)
     if vapid_configured() == false => return nil
-    n | db::value("select json_array_length(campfire_push_subscriptions($1)) as v", [m["id"]])
+    n | db::value("select json_array_length(campfire_push_subscriptions($1)) as v", [m{"id"}])
     if n == nil or n == 0 => return nil
     root | multipart::root()
-    :run_cmd("MESSAGE_ID=" + :str(m["id"]) + " setsid goblin run jobs/push.gbln >> " + multipart::shq(root + "/tmp/log/jobs.log") + " 2>&1 < /dev/null &", root)
+    :run_cmd("MESSAGE_ID=" + :str(m{"id"}) + " setsid goblin run jobs/push.gbln >> " + multipart::shq(root + "/tmp/log/jobs.log") + " 2>&1 < /dev/null &", root)
     return nil
 xx

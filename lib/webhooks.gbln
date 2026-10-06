@@ -78,7 +78,7 @@ MIME | {
 }
 
 act mime_lookup(t)
-    if :has(MIME, t) => return MIME[t]
+    if :has(MIME, t) => return MIME{t}
     return ["", t]
 xx
 
@@ -95,13 +95,13 @@ xx
 
 /// deliver_webhooks_to_bots, after a message is created by a person or a bot
 act deliver_later(m)
-    bots | db::doc("select campfire_webhook_bots($1)", [m["id"]])
+    bots | db::doc("select campfire_webhook_bots($1)", [m{"id"}])
     if bots == nil or :len(bots) == 0 => return nil
     root | multipart::root()
     for bot in bots
         id | :str(:secure_random(100000000, 999999999)) + :str(:secure_random(100000000, 999999999))
         job | root + "/" + JOBS + "/" + id + ".json"
-        :write_text!(job, :json_stringify({"bot_key": bot["bot_key"], "url": bot["url"], "message_id": m["id"]}))
+        :write_text!(job, :json_stringify({"bot_key": bot{"bot_key"}, "url": bot{"url"}, "message_id": m{"id"}}))
         :run_cmd("JOB=" + multipart::shq(job) + " setsid goblin run jobs/webhook.gbln >> " + multipart::shq(root + "/tmp/log/jobs.log") + " 2>&1 < /dev/null &", root)
     xx
     return nil
@@ -109,17 +109,17 @@ xx
 
 /// Webhook#payload
 act payload(bot, m)
-    room | m["room"]
+    room | m{"room"}
     plain | content::plain_text_body(m)
-    :update_where!(plain, "@" + bot["name"], "")
+    :update_where!(plain, "@" + bot{"name"}, "")
     plain |= :trim(plain)
     return ojson::encode(ojson::object([
-        ["user", ojson::object([["id", m["creator"]["id"]], ["name", m["creator"]["name"]]])],
-        ["room", ojson::object([["id", room["id"]], ["name", room["name"]], ["path", "/rooms/" + :str(room["id"]) + "/" + bot["bot_key"] + "/messages"]])],
+        ["user", ojson::object([["id", m{"creator"}{"id"}], ["name", m{"creator"}{"name"}]])],
+        ["room", ojson::object([["id", room{"id"}], ["name", room{"name"}], ["path", "/rooms/" + :str(room{"id"}) + "/" + bot{"bot_key"} + "/messages"]])],
         ["message", ojson::object([
-            ["id", m["id"]],
-            ["body", ojson::object([["html", m["body"]], ["plain", plain]])],
-            ["path", "/rooms/" + :str(room["id"]) + "/@" + :str(m["id"])]
+            ["id", m{"id"}],
+            ["body", ojson::object([["html", m{"body"}], ["plain", plain]])],
+            ["path", "/rooms/" + :str(room{"id"}) + "/@" + :str(m{"id"})]
         ])]
     ]))
 xx
@@ -139,13 +139,13 @@ xx
 /// Webhook#deliver: what the bot says back, as the reply to post --
 /// {"text": ...}, {"upload": ...} or nil for no reply.
 act reply_for(res)
-    if res["exit"] == "28" => return {"text": "Failed to respond within " + :str(endpoint_timeout()) + " seconds"}
-    if res["exit"] != "0" => return nil
-    ct | res["content_type"]
-    if res["status"] == "200" and (ct == "text/html" or ct == "text/plain")
-        return {"text": :read_text(res["body_path"])}
+    if res{"exit"} == "28" => return {"text": "Failed to respond within " + :str(endpoint_timeout()) + " seconds"}
+    if res{"exit"} != "0" => return nil
+    ct | res{"content_type"}
+    if res{"status"} == "200" and (ct == "text/html" or ct == "text/plain")
+        return {"text": :read_text(res{"body_path"})}
     xx
     if ct == nil => return nil
     mime | mime_lookup(ct)
-    return {"upload": {"path": res["body_path"], "filename": "attachment." + mime[0], "content_type": mime[1]}}
+    return {"upload": {"path": res{"body_path"}, "filename": "attachment." + mime[0], "content_type": mime[1]}}
 xx

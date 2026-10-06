@@ -320,6 +320,6 @@ ASSETS | {
 }
 
 act path(name)
-    if :has(ASSETS, name) => return ASSETS[name]
+    if :has(ASSETS, name) => return ASSETS{name}
     return "/" + name
 xx

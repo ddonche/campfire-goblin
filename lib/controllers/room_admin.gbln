@@ -48,7 +48,7 @@ xx
 /// params.fetch(:user_ids, []) as a JSON array of ids for the SQL functions.
 act user_ids(c)
     ids | []
-    raw | http::param(c["req"], "user_ids[]")
+    raw | http::param(c{"req"}, "user_ids[]")
     if :is_array(raw) == false
         if raw == "" => return ids
         raw |= [raw]
@@ -65,51 +65,51 @@ xx
 
 act not_found_redirect(c)
     flashed | auth::flash_next(c, "alert", "Room not found or inaccessible")
-    return auth::keep(flashed, http::redirect(c["req"], "/"))
+    return auth::keep(flashed, http::redirect(c{"req"}, "/"))
 xx
 
 /// ensure_permission_to_create_rooms
 act may_create_rooms(c)
     if auth::is_admin(c) => return true
-    settings | c["account"]["settings"]
+    settings | c{"account"}{"settings"}
     if settings == nil or :has(settings, "restrict_room_creation_to_administrators") == false => return true
-    v | settings["restrict_room_creation_to_administrators"]
+    v | settings{"restrict_room_creation_to_administrators"}
     return v != true and v != "true"
 xx
 
 /// last_room_visited, for link_back_to_last_room_visited
 act last_room_id(c)
-    last | http::cookie_of(c["req"], "last_room")
+    last | http::cookie_of(c{"req"}, "last_room")
     if numeric(last) == false => last |= "0"
-    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by (r.id = $2) desc, r.created_at, mb.id", [c["user"]["id"], :int(last)])
+    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by (r.id = $2) desc, r.created_at, mb.id", [c{"user"}{"id"}, :int(last)])
     if room == nil => return nil
-    return room["id"]
+    return room{"id"}
 xx
 
 act active_users()
     out | []
     for row in db::all(ACTIVE_USERS_SQL, [])
-        :put_last!(out, row["u"])
+        :put_last!(out, row{"u"})
     xx
     return out
 xx
 
 act find_room(c, id, scope)
     if numeric(id) == false => return nil
-    return db::doc(ADMIN_ROOM_SQL, [c["user"]["id"], :int(id), scope])
+    return db::doc(ADMIN_ROOM_SQL, [c{"user"}{"id"}, :int(id), scope])
 xx
 
 act page(c, title, main)
     p | layout::page(title)
-    :update!(p["nav"], room_forms::back_nav(last_room_id(c)))
-    :update!(p["main"], main)
+    :update!(p{"nav"}, room_forms::back_nav(last_room_id(c)))
+    :update!(p{"main"}, main)
     return p
 xx
 
 /// room_params: params.require(:room).permit(:name)
 act room_name_param(c)
-    if http::has_param(c["req"], "room[name]") == false => return nil
-    return http::param(c["req"], "room[name]")
+    if http::has_param(c{"req"}, "room[name]") == false => return nil
+    return http::param(c{"req"}, "room[name]")
 xx
 
 act bad_request()
@@ -137,35 +137,35 @@ xx
 act edit_open(c, id)
     data | find_room(c, id, "")
     if data == nil => return not_found_redirect(c)
-    room | data["room"]
-    admin | auth::can_administer(c, room["creator_id"])
-    rid | :str(room["id"])
+    room | data{"room"}
+    admin | auth::can_administer(c, room{"creator_id"})
+    rid | :str(room{"id"})
     access | room_forms::open_menu(c, active_users(), admin, "/rooms/closeds/" + rid + "/edit")
-    form | room_forms::form(c, room, room["name"], "/rooms/opens/" + rid, admin, access)
+    form | room_forms::form(c, room, room{"name"}, "/rooms/opens/" + rid, admin, access)
     main | room_forms::edit_layout(c, room, admin, form)
-    return http::html(layout::render(c, page(c, "Edit settings for " + room["name"], main)))
+    return http::html(layout::render(c, page(c, "Edit settings for " + room{"name"}, main)))
 xx
 
 act edit_closed(c, id)
     data | find_room(c, id, "")
     if data == nil => return not_found_redirect(c)
-    room | data["room"]
-    admin | auth::can_administer(c, room["creator_id"])
-    rid | :str(room["id"])
+    room | data{"room"}
+    admin | auth::can_administer(c, room{"creator_id"})
+    rid | :str(room{"id"})
     selected | []
     unselected | []
-    member_ids | data["member_ids"]
+    member_ids | data{"member_ids"}
     for u in active_users()
-        if :has(member_ids, u["id"])
+        if :has(member_ids, u{"id"})
             :put_last!(selected, u)
         else
             :put_last!(unselected, u)
         xx
     xx
     access | room_forms::closed_menu(c, selected, unselected, admin, false, "/rooms/opens/" + rid + "/edit")
-    form | room_forms::form(c, room, room["name"], "/rooms/closeds/" + rid, admin, access)
+    form | room_forms::form(c, room, room{"name"}, "/rooms/closeds/" + rid, admin, access)
     main | room_forms::edit_layout(c, room, admin, form)
-    return http::html(layout::render(c, page(c, "Edit settings for " + room["name"], main)))
+    return http::html(layout::render(c, page(c, "Edit settings for " + room{"name"}, main)))
 xx
 
 /// ---------- create ----------
@@ -174,25 +174,25 @@ act create_open(c)
     if may_create_rooms(c) == false => return http::head(403)
     name | room_name_param(c)
     if name == nil => return bad_request()
-    room | db::doc("campfire_create_room('Rooms::Open', $2, $3, " + ids_sql() + ")", [:json_stringify([c["user"]["id"]]), name, c["user"]["id"]])
+    room | db::doc("campfire_create_room('Rooms::Open', $2, $3, " + ids_sql() + ")", [:json_stringify([c{"user"}{"id"}]), name, c{"user"}{"id"}])
     cable::broadcast("rooms", cable::stream_tag("prepend", "shared_rooms", sidebar_views::shared(room, false)))
-    return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
 xx
 
 act create_closed(c)
     if may_create_rooms(c) == false => return http::head(403)
     name | room_name_param(c)
     if name == nil => return bad_request()
-    room | db::doc("campfire_create_room('Rooms::Closed', $2, $3, " + ids_sql() + ")", [:json_stringify(user_ids(c)), name, c["user"]["id"]])
+    room | db::doc("campfire_create_room('Rooms::Closed', $2, $3, " + ids_sql() + ")", [:json_stringify(user_ids(c)), name, c{"user"}{"id"}])
     broadcast_to_members(room, "prepend", "shared_rooms")
-    return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
 xx
 
 /// The same sidebar entry, to each member's own rooms stream.
 act broadcast_to_members(room, verb, target)
     streams | []
-    for row in db::all("select campfire_gid_param('User', user_id) || ':rooms' as s from memberships where room_id = $1 order by id", [room["id"]])
-        :put_last!(streams, row["s"])
+    for row in db::all("select campfire_gid_param('User', user_id) || ':rooms' as s from memberships where room_id = $1 order by id", [room{"id"}])
+        :put_last!(streams, row{"s"})
     xx
     cable::broadcast_many(streams, cable::stream_tag(verb, target, sidebar_views::shared(room, false)))
     return nil
@@ -203,33 +203,33 @@ xx
 act update_open(c, id)
     data | find_room(c, id, "")
     if data == nil => return not_found_redirect(c)
-    was | data["room"]
-    if auth::can_administer(c, was["creator_id"]) == false => return http::head(403)
+    was | data{"room"}
+    if auth::can_administer(c, was{"creator_id"}) == false => return http::head(403)
     name | room_name_param(c)
     if name == nil => return bad_request()
-    room | db::doc("campfire_update_room($1, 'Rooms::Open', $2, null)", [was["id"], name])
+    room | db::doc("campfire_update_room($1, 'Rooms::Open', $2, null)", [was{"id"}, name])
     cable::broadcast("rooms", cable::stream_tag("replace", "list_" + html::room_key(room), sidebar_views::shared(room, false)))
-    return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
 xx
 
 act update_closed(c, id)
     data | find_room(c, id, "")
     if data == nil => return not_found_redirect(c)
-    was | data["room"]
-    if auth::can_administer(c, was["creator_id"]) == false => return http::head(403)
+    was | data{"room"}
+    if auth::can_administer(c, was{"creator_id"}) == false => return http::head(403)
     name | room_name_param(c)
     if name == nil => return bad_request()
-    room | db::doc("campfire_update_room($2, 'Rooms::Closed', $3, " + ids_sql() + ")", [:json_stringify(user_ids(c)), was["id"], name])
+    room | db::doc("campfire_update_room($2, 'Rooms::Closed', $3, " + ids_sql() + ")", [:json_stringify(user_ids(c)), was{"id"}, name])
     broadcast_to_members(room, "replace", "list_" + html::room_key(room))
-    return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
 xx
 
 /// GET /rooms/opens/:id and /rooms/closeds/:id
 act show(c, id)
     data | find_room(c, id, "")
     if data == nil => return not_found_redirect(c)
-    rid | :str(data["room"]["id"])
-    res | http::redirect(c["req"], "/rooms/" + rid)
+    rid | :str(data{"room"}{"id"})
+    res | http::redirect(c{"req"}, "/rooms/" + rid)
     res |= http::add_cookie(res, "last_room", rid, PERMANENT + "; samesite=lax")
     return res
 xx
@@ -238,34 +238,34 @@ xx
 
 act new_direct(c)
     p | layout::page("Campfire")
-    :update!(p["main"], room_forms::direct_new(c))
+    :update!(p{"main"}, room_forms::direct_new(c))
     return http::html(layout::render(c, p))
 xx
 
 act create_direct(c)
     ids | user_ids(c)
-    :put_last!(ids, c["user"]["id"])
-    found | db::doc("campfire_find_or_create_direct($2, " + ids_sql() + ")", [:json_stringify(ids), c["user"]["id"]])
-    room | found["room"]
-    for mb in db::doc(DIRECT_MEMBERSHIPS_SQL, [room["id"]])
-        cable::broadcast(mb["stream"], cable::stream_tag("prepend", "direct_rooms", sidebar_views::direct(mb)))
+    :put_last!(ids, c{"user"}{"id"})
+    found | db::doc("campfire_find_or_create_direct($2, " + ids_sql() + ")", [:json_stringify(ids), c{"user"}{"id"}])
+    room | found{"room"}
+    for mb in db::doc(DIRECT_MEMBERSHIPS_SQL, [room{"id"}])
+        cable::broadcast(mb{"stream"}, cable::stream_tag("prepend", "direct_rooms", sidebar_views::direct(mb)))
     xx
-    return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
 xx
 
 act edit_direct(c, id)
     data | find_room(c, id, "directs")
     if data == nil => return not_found_redirect(c)
-    room | data["room"]
-    users | data["members"]
+    room | data{"room"}
+    users | data{"members"}
     if :len(users) > 1
         others | []
         for u in users
-            if u["id"] != c["user"]["id"] => :put_last!(others, u)
+            if u{"id"} != c{"user"}{"id"} => :put_last!(others, u)
         xx
         users |= others
     xx
-    title | "Edit settings for " + message_views::room_name(room, c["user"]["id"])
+    title | "Edit settings for " + message_views::room_name(room, c{"user"}{"id"})
     return http::html(layout::render(c, page(c, title, room_forms::direct_edit(c, room, users))))
 xx
 
@@ -274,8 +274,8 @@ xx
 act destroy_direct(c, id)
     data | find_room(c, id, "directs")
     if data == nil => return not_found_redirect(c)
-    room | data["room"]
-    db::exec("select campfire_destroy_room($1)", [room["id"]])
+    room | data{"room"}
+    db::exec("select campfire_destroy_room($1)", [room{"id"}])
     cable::broadcast("rooms", cable::stream_tag("remove", "list_" + html::room_key(room), nil))
-    return http::redirect(c["req"], "/")
+    return http::redirect(c{"req"}, "/")
 xx

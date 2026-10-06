@@ -79,7 +79,7 @@ xx
 /// and the response cookies the request owes the browser.
 act context(req)
     token | http::cookie_of(req, SESSION_COOKIE)
-    bot_key | :trim(path_bot_key(req["path"]))
+    bot_key | :trim(path_bot_key(req{"path"}))
     if bot_key == "" => bot_key |= :trim(http::param(req, "bot_key"))
     csrf | http::cookie_of(req, CSRF_COOKIE)
     new_csrf | false
@@ -88,20 +88,20 @@ act context(req)
         new_csrf |= true
     xx
     given | ""
-    if req["method"] != "GET" and req["method"] != "HEAD"
+    if req{"method"} != "GET" and req{"method"} != "HEAD"
         given |= http::param(req, "authenticity_token")
         if given == "" => given |= http::header("x-csrf-token")
     xx
     data | db::doc(CONTEXT_SQL, [token, bot_key, csrf, given])
-    user | data["user"]
+    user | data{"user"}
     by | ""
     if user != nil
         by |= "session"
-        if user["stale"]
-            db::exec("update sessions set last_active_at = utc_now(), updated_at = utc_now(), user_agent = $2, ip_address = $3 where id = $1", [user["session_id"], req["user_agent"], req["ip"]])
+        if user{"stale"}
+            db::exec("update sessions set last_active_at = utc_now(), updated_at = utc_now(), user_agent = $2, ip_address = $3 where id = $1", [user{"session_id"}, req{"user_agent"}, req{"ip"}])
         xx
-    elif data["bot"] != nil
-        user |= data["bot"]
+    elif data{"bot"} != nil
+        user |= data{"bot"}
         by |= "bot_key"
     xx
     flash | {}
@@ -111,7 +111,7 @@ act context(req)
             flash |= :json_parse(raw_flash)
         xx
     xx
-    account | data["account"]
+    account | data{"account"}
     /// Before the first run there is no account yet.
     if account == nil => account |= {"id": nil, "name": nil, "join_code": nil, "custom_styles": nil, "settings": {}, "v": "", "has_logo": false}
     return {
@@ -120,9 +120,9 @@ act context(req)
         "user": user,
         "authenticated_by": by,
         "session_token": token,
-        "csrf": data["masked_csrf"],
+        "csrf": data{"masked_csrf"},
         "csrf_raw": csrf,
-        "csrf_ok": data["csrf_ok"],
+        "csrf_ok": data{"csrf_ok"},
         "new_csrf": new_csrf,
         "flash": flash,
         "had_flash": raw_flash != "",
@@ -131,31 +131,31 @@ act context(req)
 xx
 
 act signed_in(c)
-    return c["user"] != nil
+    return c{"user"} != nil
 xx
 
 act is_admin(c)
-    u | c["user"]
+    u | c{"user"}
     if u == nil => return false
-    return u["role"] == 1
+    return u{"role"} == 1
 xx
 
 /// User#can_administer?(record): administrators, or the record's creator.
 act can_administer(c, creator_id)
-    u | c["user"]
+    u | c{"user"}
     if u == nil => return false
-    if u["role"] == 1 => return true
-    return u["id"] == creator_id
+    if u{"role"} == 1 => return true
+    return u{"id"} == creator_id
 xx
 
 /// protect_from_forgery with: :exception, unless bot_key
 act verified_request(c)
-    req | c["req"]
-    m | req["method"]
+    req | c{"req"}
+    m | req{"method"}
     if m == "GET" or m == "HEAD" => return true
-    if c["authenticated_by"] == "bot_key" => return true
-    if c["new_csrf"] => return false
-    return c["csrf_ok"]
+    if c{"authenticated_by"} == "bot_key" => return true
+    if c{"new_csrf"} => return false
+    return c{"csrf_ok"}
 xx
 
 /// Cookies every response carries: the CSRF cookie when it is new, the
@@ -170,16 +170,16 @@ act finish(c, res)
     res |= http::add_header(res, "Referrer-Policy", "strict-origin-when-cross-origin")
     res |= http::add_header(res, "X-Version", "0")
     res |= http::add_header(res, "X-Rev", "")
-    if c["new_csrf"]
-        res |= http::add_cookie(res, CSRF_COOKIE, c["csrf_raw"], "; path=/; httponly; samesite=lax")
+    if c{"new_csrf"}
+        res |= http::add_cookie(res, CSRF_COOKIE, c{"csrf_raw"}, "; path=/; httponly; samesite=lax")
     xx
-    if c["authenticated_by"] == "session"
-        res |= http::set_permanent_cookie(res, SESSION_COOKIE, c["session_token"], true)
+    if c{"authenticated_by"} == "session"
+        res |= http::set_permanent_cookie(res, SESSION_COOKIE, c{"session_token"}, true)
     xx
-    nf | c["next_flash"]
+    nf | c{"next_flash"}
     if nf != nil
         res |= http::add_cookie(res, "_campfire_flash", http::url_encode(:json_stringify(nf)), "; path=/; httponly; samesite=lax")
-    elif c["had_flash"]
+    elif c{"had_flash"}
         res |= http::delete_cookie(res, "_campfire_flash")
     xx
     return res
@@ -188,39 +188,39 @@ xx
 /// flash[:notice] / flash[:alert] for the next request.
 act flash_next(c, kind, message)
     f | {}
-    :update!(f[kind], message)
-    :update!(c["next_flash"], f)
+    :update!(f{kind}, message)
+    :update!(c{"next_flash"}, f)
     return c
 xx
 
 /// The flash for this request; reading it consumes it.
 act flash_now(c, kind, message)
-    f | c["flash"]
-    :update!(f[kind], message)
-    :update!(c["flash"], f)
+    f | c{"flash"}
+    :update!(f{kind}, message)
+    :update!(c{"flash"}, f)
     return c
 xx
 
 /// Sessions::start! then authenticated_as
 act start_session(c, user_id)
     token | secure_token()
-    req | c["req"]
-    db::exec("insert into sessions (token, user_id, user_agent, ip_address, last_active_at, created_at, updated_at) values ($1, $2, $3, $4, utc_now(), utc_now(), utc_now())", [token, user_id, req["user_agent"], req["ip"]])
-    :update!(c["session_token"], token)
-    :update!(c["authenticated_by"], "session")
+    req | c{"req"}
+    db::exec("insert into sessions (token, user_id, user_agent, ip_address, last_active_at, created_at, updated_at) values ($1, $2, $3, $4, utc_now(), utc_now(), utc_now())", [token, user_id, req{"user_agent"}, req{"ip"}])
+    :update!(c{"session_token"}, token)
+    :update!(c{"authenticated_by"}, "session")
     return c
 xx
 
 /// Controllers get a copy of the context; one that changed it (flash,
 /// session) hands it back on the response for finish() to use.
 act keep(c, res)
-    :update!(res["context"], c)
+    :update!(res{"context"}, c)
     return res
 xx
 
 act terminate_session(c, res)
-    db::exec("delete from sessions where token = $1", [c["session_token"]])
-    :update!(c["authenticated_by"], "")
+    db::exec("delete from sessions where token = $1", [c{"session_token"}])
+    :update!(c{"authenticated_by"}, "")
     res |= http::delete_cookie(res, SESSION_COOKIE)
     return keep(c, res)
 xx

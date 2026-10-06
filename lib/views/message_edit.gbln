@@ -4,18 +4,18 @@ import lib/html as html
 import lib/content as content
 
 act edit(c, m, users)
-    edit | "edit_" + "message_" + m["client_message_id"]
-    form_id | "form_message_" + m["client_message_id"]
-    delete_id | "delete_form_message_" + m["client_message_id"]
-    id | m["id"]
-    room_id | m["room_id"]
+    edit | "edit_" + "message_" + m{"client_message_id"}
+    form_id | "form_message_" + m{"client_message_id"}
+    delete_id | "delete_form_message_" + m{"client_message_id"}
+    id | m{"id"}
+    room_id | m{"room_id"}
     url | "/rooms/{room_id}/messages/{id}"
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     trash | html::img("trash.svg", "aria-hidden=\"true\" ", 0)
     remove | html::img("remove.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 0)
     inner | ""
-    if m["attachment"] != nil
-        pres | content::attachment(c, m, m["attachment"])
+    if m{"attachment"} != nil
+        pres | content::attachment(c, m, m{"attachment"})
         inner |= """        {pres}
 
         <div class="message__edit-btns flex align-center justify-space-between gap full-width pad-block-start-half">
@@ -25,10 +25,10 @@ act edit(c, m, users)
 </button>        </div>
 """
     else
-        base | c["req"]["base"]
-        value | html::h(content::editable_body(c, m["body"], users))
+        base | c{"req"}{"base"}
+        value | html::h(content::editable_body(c, m{"body"}, users))
         check | html::img("check.svg", "aria-hidden=\"true\" ", 0)
-        cid | m["client_message_id"]
+        cid | m{"client_message_id"}
         inner |= """        <div class="composer--edit composer--rich-text">
           <form id="{form_id}" data-controller="form" data-action="lexxy:file-accept-&gt;form#preventAttachment keydown.esc-&gt;form#cancel keydown.ctrl+enter-&gt;form#submit:prevent keydown.meta+enter-&gt;form#submit:prevent" action="{url}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
             <div class="full-width input input--actor min-width fill-white">
@@ -69,12 +69,12 @@ xx
 
 /// messages/boosts/new
 act new_boost(c, m)
-    cid | m["client_message_id"]
-    id | m["id"]
-    token | html::hidden_token(c["csrf"])
-    u | c["user"]
+    cid | m{"client_message_id"}
+    id | m{"id"}
+    token | html::hidden_token(c{"csrf"})
+    u | c{"user"}
     avatar | html::avatar_tag(u, "")
-    name | html::h(u["name"])
+    name | html::h(u{"name"})
     check | html::img("check.svg", "aria-hidden=\"true\" ", 0)
     minus | html::img("minus.svg", "aria-hidden=\"true\" ", 0)
     return """<turbo-frame id="new_boost_message_{cid}">

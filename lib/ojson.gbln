@@ -18,14 +18,14 @@ act encode_value(v)
     if :is_map(v)
         if :has(v, "__ordered_pairs")
             parts | []
-            for pair in v["__ordered_pairs"]
+            for pair in v{"__ordered_pairs"}
                 :put_last!(parts, :json_stringify(pair[0]) + ":" + encode_value(pair[1]))
             xx
             return "\{" + :join(parts, ",") + "}"
         xx
         parts | []
         for k in :keys(v)
-            :put_last!(parts, :json_stringify(k) + ":" + encode_value(v[k]))
+            :put_last!(parts, :json_stringify(k) + ":" + encode_value(v{k}))
         xx
         return "\{" + :join(parts, ",") + "}"
     xx

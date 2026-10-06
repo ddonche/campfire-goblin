@@ -6,22 +6,22 @@ import lib/html as html
 /// GET /service-worker(.js)
 act service_worker(c)
     res | http::response(200, :read_text("lib/templates/service_worker.js"))
-    :update!(res["headers"]["Content-Type"], "text/javascript; charset=utf-8")
+    :update!(res{"headers"}{"Content-Type"}, "text/javascript; charset=utf-8")
     return res
 xx
 
 /// GET /webmanifest(.json) -- pwa/manifest.json.erb, which escapes its
 /// interpolations as HTML (hence &amp; in the logo URL).
 act manifest(c)
-    account | c["account"]
+    account | c{"account"}
     name | "Campfire"
     v | ""
     if account != nil
-        name |= account["name"]
-        v |= account["v"]
+        name |= account{"name"}
+        v |= account{"v"}
     xx
     name |= html::h(name)
-    base | c["req"]["base"]
+    base | c{"req"}{"base"}
     add | base + html::asset("add.svg")
     person | base + html::asset("person.svg")
     chat | base + html::asset("screenshots/android-chat.png")
@@ -36,6 +36,6 @@ act manifest(c)
     body |= :update_matching(body, "@SIDEBAR@", sidebar)
     body |= :update_matching(body, "@DARK@", dark)
     res | http::response(200, body)
-    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    :update!(res{"headers"}{"Content-Type"}, "application/json; charset=utf-8")
     return res
 xx

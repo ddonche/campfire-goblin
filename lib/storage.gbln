@@ -135,12 +135,12 @@ xx
 act create_blob(upload)
     key | new_key()
     out | tmp_out()
-    if multipart::storage_cmd(["ingest", upload["path"], file_path(key), out]) == false => return nil
+    if multipart::storage_cmd(["ingest", upload{"path"}, file_path(key), out]) == false => return nil
     f | read_fields(out)
     if :len(f) < 3 => return nil
-    content_type | identify(f[2], upload["content_type"])
+    content_type | identify(f[2], upload{"content_type"})
     metadata | analyze(file_path(key), content_type)
-    id | insert_blob(key, upload["filename"], content_type, metadata, :int(f[0]), f[1])
+    id | insert_blob(key, upload{"filename"}, content_type, metadata, :int(f[0]), f[1])
     return by_id(id)
 xx
 
@@ -149,14 +149,14 @@ act by_id(id)
 xx
 
 act metadata(b)
-    if b["metadata"] == nil or b["metadata"] == "" => return {}
-    return :json_parse(b["metadata"])
+    if b{"metadata"} == nil or b{"metadata"} == "" => return {}
+    return :json_parse(b{"metadata"})
 xx
 
 /// The metadata's width and height as Ruby holds them: [value, is_float]
 /// pairs, nil when absent.
 act dimensions(b)
-    raw | b["metadata"]
+    raw | b{"metadata"}
     if raw == nil => return nil
     w | html_number(raw, "width")
     h | html_number(raw, "height")
@@ -174,24 +174,24 @@ act html_number(raw, name)
 xx
 
 act variable(b)
-    return :has(VARIABLE_TYPES, b["content_type"])
+    return :has(VARIABLE_TYPES, b{"content_type"})
 xx
 
 /// Active Storage's video previewer (ffmpeg is present); no PDF previewer
 /// is installed for the original either.
 act previewable(b)
-    return :starts_with(b["content_type"], "video/")
+    return :starts_with(b{"content_type"}, "video/")
 xx
 
 act web_image(b)
-    return :has(WEB_IMAGE_TYPES, b["content_type"])
+    return :has(WEB_IMAGE_TYPES, b{"content_type"})
 xx
 
 /// Blob#format: the extension, when Marcel agrees it means the content type
 act blob_format(b)
-    ext | filename_extension(b["filename"])
-    if ext != "" and :has(FORMAT_TYPES, ext) and FORMAT_TYPES[ext] == b["content_type"] => return ext
-    if :has(TYPE_EXTENSIONS, b["content_type"]) => return TYPE_EXTENSIONS[b["content_type"]]
+    ext | filename_extension(b{"filename"})
+    if ext != "" and :has(FORMAT_TYPES, ext) and FORMAT_TYPES{ext} == b{"content_type"} => return ext
+    if :has(TYPE_EXTENSIONS, b{"content_type"}) => return TYPE_EXTENSIONS{b{"content_type"}}
     return "png"
 xx
 
@@ -229,9 +229,9 @@ act decode_variation(key)
     if data == nil => return nil
     t | :json_parse(data)
     if :is_map(t) == false or :has(t, "resize_to_limit") == false => return nil
-    lim | t["resize_to_limit"]
+    lim | t{"resize_to_limit"}
     format | "png"
-    if :has(t, "format") => format |= t["format"]
+    if :has(t, "format") => format |= t{"format"}
     if :has(FORMAT_TYPES, format) == false => return nil
     return [format, :int(lim[0]), :int(lim[1]), data]
 xx
@@ -254,34 +254,34 @@ xx
 /// Processes a variant of an image blob (or returns the one processed
 /// before) and returns its blob.
 act variant(b, v)
-    existing | db::value("select campfire_variant_blob($1, $2) as v", [b["id"], v[3]])
+    existing | db::value("select campfire_variant_blob($1, $2) as v", [b{"id"}, v[3]])
     if existing != nil => return by_id(existing)
     dims | dimensions(b)
     size | limit_size(dims, v[1], v[2])
     key | new_key()
     out | tmp_out()
-    if multipart::storage_cmd(["resize", file_path(b["key"]), file_path(key), size[0], size[1], v[0], out]) == false => return nil
+    if multipart::storage_cmd(["resize", file_path(b{"key"}), file_path(key), size[0], size[1], v[0], out]) == false => return nil
     f | read_fields(out)
     if :len(f) < 3 => return nil
-    id | insert_blob(key, filename_base(b["filename"]) + "." + v[0], FORMAT_TYPES[v[0]], "\{\"identified\":true}", :int(f[0]), f[1])
-    db::exec("select campfire_attach_variant($1, $2, $3)", [b["id"], v[3], id])
+    id | insert_blob(key, filename_base(b{"filename"}) + "." + v[0], FORMAT_TYPES{v[0]}, "\{\"identified\":true}", :int(f[0]), f[1])
+    db::exec("select campfire_attach_variant($1, $2, $3)", [b{"id"}, v[3], id])
     return by_id(id)
 xx
 
 /// A video's preview image (its first frame), attached to the blob
 act preview_image(b)
-    existing | db::doc("select campfire_attached('ActiveStorage::Blob', $1, 'preview_image')", [b["id"]])
+    existing | db::doc("select campfire_attached('ActiveStorage::Blob', $1, 'preview_image')", [b{"id"}])
     if existing != nil => return existing
     key | new_key()
     out | tmp_out()
-    if multipart::storage_cmd(["frame", file_path(b["key"]), file_path(key), out]) == false => return nil
+    if multipart::storage_cmd(["frame", file_path(b{"key"}), file_path(key), out]) == false => return nil
     f | read_fields(out)
     if :len(f) < 3 => return nil
-    id | insert_blob(key, filename_base(b["filename"]) + ".jpg", "image/jpeg", "\{\"identified\":true}", :int(f[0]), f[1])
-    db::exec("select campfire_attach('ActiveStorage::Blob', $1, 'preview_image', $2)", [b["id"], id])
+    id | insert_blob(key, filename_base(b{"filename"}) + ".jpg", "image/jpeg", "\{\"identified\":true}", :int(f[0]), f[1])
+    db::exec("select campfire_attach('ActiveStorage::Blob', $1, 'preview_image', $2)", [b{"id"}, id])
     pb | by_id(id)
     /// The frame has the video's size; the variant needs it.
-    :update!(pb["metadata"], b["metadata"])
+    :update!(pb{"metadata"}, b{"metadata"})
     return pb
 xx
 
@@ -291,7 +291,7 @@ act representation(b, v)
     if previewable(b)
         img | preview_image(b)
         if img == nil => return nil
-        if :has(img, "metadata") == false or img["metadata"] == nil or :has(img["metadata"], "width") == false => :update!(img["metadata"], b["metadata"])
+        if :has(img, "metadata") == false or img{"metadata"} == nil or :has(img{"metadata"}, "width") == false => :update!(img{"metadata"}, b{"metadata"})
         return variant(img, v)
     xx
     return nil
@@ -314,23 +314,23 @@ act path_escape(s)
 xx
 
 act blob_path(b, disposition)
-    p | "/rails/active_storage/blobs/redirect/" + b["signed_id"] + "/" + path_escape(b["filename"])
+    p | "/rails/active_storage/blobs/redirect/" + b{"signed_id"} + "/" + path_escape(b{"filename"})
     if disposition != "" => p |= p + "?disposition=" + disposition
     return p
 xx
 
 act representation_path(b, v)
-    return "/rails/active_storage/representations/redirect/" + b["signed_id"] + "/" + variation_key(v) + "/" + path_escape(b["filename"])
+    return "/rails/active_storage/representations/redirect/" + b{"signed_id"} + "/" + variation_key(v) + "/" + path_escape(b{"filename"})
 xx
 
 /// Blob#content_type_for_serving and #forced_disposition_for_serving
 act serving_type(b)
-    if :has(SERVE_AS_BINARY, b["content_type"]) => return "application/octet-stream"
-    return b["content_type"]
+    if :has(SERVE_AS_BINARY, b{"content_type"}) => return "application/octet-stream"
+    return b{"content_type"}
 xx
 
 act serving_disposition(b, requested)
-    if :has(SERVE_AS_BINARY, b["content_type"]) or :has(ALLOWED_INLINE, b["content_type"]) == false => return "attachment"
+    if :has(SERVE_AS_BINARY, b{"content_type"}) or :has(ALLOWED_INLINE, b{"content_type"}) == false => return "attachment"
     if requested == "attachment" => return "attachment"
     return "inline"
 xx
@@ -355,10 +355,10 @@ xx
 
 /// Blob#url on the Disk service: an expiring, signed /rails/active_storage/disk URL
 act disk_url(req, b, requested)
-    disposition | content_disposition(serving_disposition(b, requested), b["filename"])
-    data | ojson::encode(ojson::object([["key", b["key"]], ["disposition", disposition], ["content_type", serving_type(b)], ["service_name", "local"]]))
+    disposition | content_disposition(serving_disposition(b, requested), b{"filename"})
+    data | ojson::encode(ojson::object([["key", b{"key"}], ["disposition", disposition], ["content_type", serving_type(b)], ["service_name", "local"]]))
     encoded | db::value("select campfire_disk_key($1) as v", [data])
-    return req["base"] + "/rails/active_storage/disk/" + encoded + "/" + path_escape(b["filename"])
+    return req{"base"} + "/rails/active_storage/disk/" + encoded + "/" + path_escape(b{"filename"})
 xx
 
 /// ---------- direct uploads ----------
@@ -380,15 +380,15 @@ xx
 /// Attaching a blob that was uploaded directly: it is identified, and
 /// AnalyzeJob merges the analyzer's metadata into what the client sent.
 act analyze_later(b)
-    if :has(b["metadata"], "\"analyzed\":true") => return b
-    if :file_exists(file_path(b["key"])) == false => return b
-    found | analyze(file_path(b["key"]), b["content_type"])
-    existing | :trim(b["metadata"])
+    if :has(b{"metadata"}, "\"analyzed\":true") => return b
+    if :file_exists(file_path(b{"key"})) == false => return b
+    found | analyze(file_path(b{"key"}), b{"content_type"})
+    existing | :trim(b{"metadata"})
     merged | found
     if existing != "" and existing != "\{}" and :starts_with(existing, "\{")
         n | :len(existing)
         merged |= existing[0:n - 1] + "," + found[1:]
     xx
-    db::exec("update active_storage_blobs set metadata = $2 where id = $1", [b["id"], merged])
-    return by_id(b["id"])
+    db::exec("update active_storage_blobs set metadata = $2 where id = $1", [b{"id"}, merged])
+    return by_id(b{"id"})
 xx

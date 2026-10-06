@@ -25,7 +25,7 @@ act imod(a, b)
 xx
 
 act hexval(c)
-    if :has(HEXV, c) => return HEXV[c]
+    if :has(HEXV, c) => return HEXV{c}
     return -1
 xx
 
@@ -160,14 +160,14 @@ act parse_query(q)
             v |= url_decode(v)
             if :ends_with(k, "[]")
                 if :has(params, k)
-                    list | params[k]
+                    list | params{k}
                     :put_last!(list, v)
-                    :update!(params[k], list)
+                    :update!(params{k}, list)
                 else
-                    :update!(params[k], [v])
+                    :update!(params{k}, [v])
                 xx
             else
-                :update!(params[k], v)
+                :update!(params{k}, v)
             xx
         xx
     xx
@@ -181,7 +181,7 @@ act parse_cookies(header)
         kv | :trim(part)
         idx | :find(kv, "=")
         if idx != nil
-            :update!(jar[kv[0:idx]], url_decode(kv[idx + 1:]))
+            :update!(jar{kv[0:idx]}, url_decode(kv[idx + 1:]))
         xx
     xx
     return jar
@@ -231,11 +231,11 @@ act request()
         file | :env("GOBLIN_REQUEST_FILE")
         if file != nil and file != ""
             mp | multipart::parse(file, ctype)
-            for k in :keys(mp["params"])
-                :update!(params[k], mp["params"][k])
+            for k in :keys(mp{"params"})
+                :update!(params{k}, mp{"params"}{k})
             xx
-            files |= mp["files"]
-            parts_dir |= mp["dir"]
+            files |= mp{"files"}
+            parts_dir |= mp{"dir"}
             :delete_path!(file)
         xx
     elif method == "PUT" and :starts_with(path, "/rails/active_storage/disk/")
@@ -248,19 +248,19 @@ act request()
         if :starts_with(ctype, "application/x-www-form-urlencoded")
             form | parse_query(body)
             for k in :keys(form)
-                :update!(params[k], form[k])
+                :update!(params{k}, form{k})
             xx
         elif :starts_with(ctype, "application/json") and body != ""
             js | :json_parse(body)
             if :is_map(js)
                 for k in :keys(js)
-                    :update!(params[k], js[k])
+                    :update!(params{k}, js{k})
                 xx
             xx
         xx
     xx
     /// Rails' method override for forms (button_to ... method: :delete)
-    if method == "POST" and :has(params, "_method") => method |= :upper(params["_method"])
+    if method == "POST" and :has(params, "_method") => method |= :upper(params{"_method"})
     host | header("x-forwarded-host")
     if host == "" => host |= header("host")
     proto | header("x-forwarded-proto")
@@ -290,9 +290,9 @@ act request()
 xx
 
 act param(req, name)
-    p | req["params"]
+    p | req{"params"}
     if :has(p, name)
-        v | p[name]
+        v | p{name}
         if v == nil => return ""
         return v
     xx
@@ -300,18 +300,18 @@ act param(req, name)
 xx
 
 act has_param(req, name)
-    return :has(req["params"], name)
+    return :has(req{"params"}, name)
 xx
 
 act cookie_of(req, name)
-    jar | req["cookies"]
-    if :has(jar, name) => return jar[name]
+    jar | req{"cookies"}
+    if :has(jar, name) => return jar{name}
     return ""
 xx
 
 /// True when the client asked for a Turbo Stream response.
 act wants_turbo_stream(req)
-    return :has(req["accept"], "text/vnd.turbo-stream.html")
+    return :has(req{"accept"}, "text/vnd.turbo-stream.html")
 xx
 
 /// ---------- format negotiation (ActionDispatch::Http::MimeNegotiation) ----------
@@ -394,14 +394,14 @@ xx
 /// request.formats as symbols: the path's extension (params[:format]),
 /// else a valid Accept header, else xhr's js, else html
 act formats(req)
-    path | req["path"]
+    path | req{"path"}
     if :ends_with(path, ".json") => return ["json"]
     if :ends_with(path, ".js") => return ["js"]
-    accept | req["accept"]
+    accept | req{"accept"}
     browser_like | :is_matching(accept, ",\\s*\\*/\\*") or :is_matching(accept, "\\*/\\*\\s*,")
-    valid | accept != "" and (req["xhr"] or browser_like == false)
+    valid | accept != "" and (req{"xhr"} or browser_like == false)
     if valid == false
-        if req["xhr"] => return ["js"]
+        if req{"xhr"} => return ["js"]
         return ["html"]
     xx
     if :has(accept, ",") == false
@@ -419,7 +419,7 @@ act formats(req)
             sorted | []
             placed | false
             for item in items
-                if placed == false and item["q"] < q
+                if placed == false and item{"q"} < q
                     :put_last!(sorted, entry)
                     placed |= true
                 xx
@@ -431,7 +431,7 @@ act formats(req)
     xx
     out | []
     for item in items
-        for sym in parse_range(item["name"])
+        for sym in parse_range(item{"name"})
             :put_last!(out, sym)
         xx
     xx
@@ -445,7 +445,7 @@ act not_acceptable(req)
     fs | formats(req)
     if :len(fs) > 0 and fs[0] == "json"
         res | response(406, "\{\"status\":406,\"error\":\"Not Acceptable\"}")
-        :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+        :update!(res{"headers"}{"Content-Type"}, "application/json; charset=utf-8")
         return res
     xx
     return response(406, " ")
@@ -472,9 +472,9 @@ xx
 /// against request.formats, as Rails' template lookup would. Responses that
 /// negotiated for themselves (respond_to, render json:) set "negotiated".
 act check_template_format(req, res)
-    if req["method"] != "GET" and req["method"] != "HEAD" => return res
-    if res["status"] != 200 or :has(res, "negotiated") => return res
-    ctype_parts | :split(res["headers"]["Content-Type"], ";")
+    if req{"method"} != "GET" and req{"method"} != "HEAD" => return res
+    if res{"status"} != 200 or :has(res, "negotiated") => return res
+    ctype_parts | :split(res{"headers"}{"Content-Type"}, ";")
     ctype | ctype_parts[0]
     fmt | nil
     if ctype == "text/html" => fmt |= "html"
@@ -505,57 +505,57 @@ xx
 
 act turbo_stream(body)
     res | response(200, body)
-    :update!(res["headers"]["Content-Type"], "text/vnd.turbo-stream.html; charset=utf-8")
+    :update!(res{"headers"}{"Content-Type"}, "text/vnd.turbo-stream.html; charset=utf-8")
     return res
 xx
 
 act json(status, value)
     res | response(status, :json_stringify(value))
-    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
-    :update!(res["negotiated"], true)
+    :update!(res{"headers"}{"Content-Type"}, "application/json; charset=utf-8")
+    :update!(res{"negotiated"}, true)
     return res
 xx
 
 act text(status, body)
     res | response(status, body)
-    :update!(res["headers"]["Content-Type"], "text/plain; charset=utf-8")
+    :update!(res{"headers"}{"Content-Type"}, "text/plain; charset=utf-8")
     return res
 xx
 
 /// Rails' `head` for an HTML request
 act head(status)
     res | response(status, "")
-    :update!(res["headers"]["Content-Type"], "text/html")
+    :update!(res{"headers"}{"Content-Type"}, "text/html")
     return res
 xx
 
 /// Rails' redirect_to: 302 to an absolute URL (303 after non-GET from Turbo).
 act redirect(req, location)
     url | location
-    if :starts_with(url, "/") => url |= req["base"] + url
+    if :starts_with(url, "/") => url |= req{"base"} + url
     status | 302
     res | response(status, "")
-    :update!(res["headers"]["Location"], url)
+    :update!(res{"headers"}{"Location"}, url)
     return res
 xx
 
 act see_other(req, location)
     res | redirect(req, location)
-    :update!(res["status"], 303)
+    :update!(res{"status"}, 303)
     return res
 xx
 
 act add_header(res, name, value)
-    :update!(res["headers"][name], value)
+    :update!(res{"headers"}{name}, value)
     return res
 xx
 
 /// Cookie attributes Goblin's set_cookie() has no option for (SameSite,
 /// Expires) ride along in the value, which goblin-host writes verbatim.
 act add_cookie(res, name, value, attrs)
-    list | res["cookies"]
+    list | res{"cookies"}
     :put_last!(list, name + "=" + value + attrs)
-    :update!(res["cookies"], list)
+    :update!(res{"cookies"}, list)
     return res
 xx
 
@@ -576,10 +576,10 @@ xx
 /// send_file with the Content-Disposition header already formatted
 act send_file_as(path, content_type, disposition, cache_control)
     res | response(200, "")
-    :update!(res["headers"]["Content-Type"], content_type)
-    :update!(res["headers"]["Content-Disposition"], disposition)
-    :update!(res["headers"]["Cache-Control"], cache_control)
-    :update!(res["headers"]["X-Accel-Redirect"], path)
+    :update!(res{"headers"}{"Content-Type"}, content_type)
+    :update!(res{"headers"}{"Content-Disposition"}, disposition)
+    :update!(res{"headers"}{"Cache-Control"}, cache_control)
+    :update!(res{"headers"}{"X-Accel-Redirect"}, path)
     return res
 xx
 
@@ -590,20 +590,20 @@ xx
 /// Writes the response through the host's envelope and returns the body,
 /// which the router emits as its final expression.
 act emit(res)
-    :set_status(res["status"])
-    hs | res["headers"]
+    :set_status(res{"status"})
+    hs | res{"headers"}
     for k in :keys(hs)
-        :set_header(k, hs[k])
+        :set_header(k, hs{k})
     xx
-    for c in res["cookies"]
+    for c in res{"cookies"}
         /// set_cookie(name, value) appends "name=value"; split ours back out.
         idx | :find(c, "=")
         :set_cookie(c[0:idx], c[idx + 1:])
     xx
     /// The CLI prints no envelope at all for an empty body, which would drop
     /// the status and headers too, so an empty body goes out as one space.
-    if res["body"] == "" => return " "
-    return res["body"]
+    if res{"body"} == "" => return " "
+    return res{"body"}
 xx
 
 /// ---------- base64 ----------

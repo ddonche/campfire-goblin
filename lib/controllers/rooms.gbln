@@ -40,7 +40,7 @@ xx
 
 act not_found_redirect(c)
     flashed | auth::flash_next(c, "alert", "Room not found or inaccessible")
-    return auth::keep(flashed, http::redirect(c["req"], "/"))
+    return auth::keep(flashed, http::redirect(c{"req"}, "/"))
 xx
 
 /// GET /rooms/:id and /rooms/:id/@:message_id
@@ -48,21 +48,21 @@ act show(c, id, message_id)
     if numeric(id) == false => return not_found_redirect(c)
     at | 0
     if message_id != "" and numeric(message_id) => at |= :int(message_id)
-    data | db::doc(ROOM_SQL, [c["user"]["id"], :int(id), at])
+    data | db::doc(ROOM_SQL, [c{"user"}{"id"}, :int(id), at])
     if data == nil => return not_found_redirect(c)
-    if at != 0 and :len(data["messages"]) == 0
-        data |= db::doc(ROOM_SQL, [c["user"]["id"], :int(id), 0])
+    if at != 0 and :len(data{"messages"}) == 0
+        data |= db::doc(ROOM_SQL, [c{"user"}{"id"}, :int(id), 0])
     xx
-    room | data["room"]
-    name | message_views::room_name(room, c["user"]["id"])
+    room | data{"room"}
+    name | message_views::room_name(room, c{"user"}{"id"})
     p | layout::page(name)
-    :update!(p["body_class"], "sidebar")
-    rid | room["id"]
-    :update!(p["head"], "<meta name=\"turbo-cache-control\" content=\"no-preview\">  \n  <meta name=\"current-room-id\" content=\"{rid}\">\n")
-    :update!(p["nav"], room_views::nav(c, room, name))
-    :update!(p["sidebar"], room_views::sidebar_frame())
-    :update!(p["main"], room_views::show_main(c, data))
-    :update!(p["footer"], room_views::composer(c, room))
+    :update!(p{"body_class"}, "sidebar")
+    rid | room{"id"}
+    :update!(p{"head"}, "<meta name=\"turbo-cache-control\" content=\"no-preview\">  \n  <meta name=\"current-room-id\" content=\"{rid}\">\n")
+    :update!(p{"nav"}, room_views::nav(c, room, name))
+    :update!(p{"sidebar"}, room_views::sidebar_frame())
+    :update!(p{"main"}, room_views::show_main(c, data))
+    :update!(p{"footer"}, room_views::composer(c, room))
     res | http::html(layout::render(c, p))
     res |= http::add_cookie(res, "last_room", :str(rid), PERMANENT + "; samesite=lax")
     return res
@@ -70,22 +70,22 @@ xx
 
 /// GET /rooms -- the most recently joined room
 act index(c)
-    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by mb.id desc", [c["user"]["id"]])
-    if room == nil => return http::redirect(c["req"], "/")
-    return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by mb.id desc", [c{"user"}{"id"}])
+    if room == nil => return http::redirect(c{"req"}, "/")
+    return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
 xx
 
 /// GET / -- WelcomeController#show: the last room visited, else the first
 /// room, else the empty state.
 act root(c)
-    last | http::cookie_of(c["req"], "last_room")
+    last | http::cookie_of(c{"req"}, "last_room")
     if last == "" or numeric(last) == false => last |= "0"
-    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by (r.id = $2) desc, r.created_at, mb.id", [c["user"]["id"], :int(last)])
-    if room != nil => return http::redirect(c["req"], "/rooms/" + :str(room["id"]))
+    room | db::one("select r.id from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 order by (r.id = $2) desc, r.created_at, mb.id", [c{"user"}{"id"}, :int(last)])
+    if room != nil => return http::redirect(c{"req"}, "/rooms/" + :str(room{"id"}))
     p | layout::page("No rooms yet")
-    :update!(p["body_class"], "sidebar")
-    :update!(p["sidebar"], room_views::sidebar_frame())
-    :update!(p["main"], welcome_main())
+    :update!(p{"body_class"}, "sidebar")
+    :update!(p{"sidebar"}, room_views::sidebar_frame())
+    :update!(p{"main"}, welcome_main())
     return http::html(layout::render(c, p))
 xx
 
@@ -107,10 +107,10 @@ xx
 /// DELETE /rooms/:id
 act destroy(c, id)
     if numeric(id) == false => return not_found_redirect(c)
-    room | db::one("select r.id, r.creator_id, r.type, r.name from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [c["user"]["id"], :int(id)])
+    room | db::one("select r.id, r.creator_id, r.type, r.name from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and r.id = $2", [c{"user"}{"id"}, :int(id)])
     if room == nil => return not_found_redirect(c)
-    if auth::can_administer(c, room["creator_id"]) == false => return http::head(403)
-    db::exec("select campfire_destroy_room($1)", [room["id"]])
+    if auth::can_administer(c, room{"creator_id"}) == false => return http::head(403)
+    db::exec("select campfire_destroy_room($1)", [room{"id"}])
     cable::broadcast("rooms", cable::stream_tag("remove", "list_" + html::room_key(room), nil))
-    return http::redirect(c["req"], "/")
+    return http::redirect(c{"req"}, "/")
 xx

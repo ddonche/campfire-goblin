@@ -29,7 +29,7 @@ act identifier_json(identifier)
 xx
 
 act room_of(ident)
-    rid | ident["room_id"]
+    rid | ident{"room_id"}
     if rid == nil => return 0
     s | :str(rid)
     if :is_matching(s, "^[0-9]+$") == false => return 0
@@ -37,24 +37,24 @@ act room_of(ident)
 xx
 
 act handle(c)
-    req | c["req"]
+    req | c{"req"}
     /// ActionCable's allowed_request_origins: same origin only.
     origin | http::header("origin")
-    if origin != "" and origin != req["base"] => return http::json(403, {"error": "origin"})
-    if c["user"] == nil or c["authenticated_by"] != "session"
+    if origin != "" and origin != req{"base"} => return http::json(403, {"error": "origin"})
+    if c{"user"} == nil or c{"authenticated_by"} != "session"
         return http::json(401, {"type": "disconnect", "reason": "unauthorized", "reconnect": false})
     xx
-    uid | c["user"]["id"]
-    p | req["params"]
+    uid | c{"user"}{"id"}
+    p | req{"params"}
     command | http::param(req, "command")
     if command == "connect"
         return http::json(200, {"cursor": db::value("select campfire_cable_cursor() as v", [])})
     xx
-    if command == "poll" => return poll(uid, p["subscriptions"])
+    if command == "poll" => return poll(uid, p{"subscriptions"})
     identifier | http::param(req, "identifier")
     stream | stream_for(uid, identifier)
     ident | identifier_json(identifier)
-    channel | ident["channel"]
+    channel | ident{"channel"}
     if command == "subscribe"
         if stream == nil => return http::json(200, {"type": "reject_subscription"})
         if channel == "PresenceChannel" => db::exec("select campfire_presence($1, $2, 'present')", [uid, room_of(ident)])
@@ -69,11 +69,11 @@ act handle(c)
         data | {}
         raw | http::param(req, "data")
         if :starts_with(:trim(raw), "\{") => data |= :json_parse(raw)
-        act_name | data["action"]
+        act_name | data{"action"}
         if channel == "PresenceChannel" and (act_name == "present" or act_name == "absent" or act_name == "refresh")
             db::exec("select campfire_presence($1, $2, $3)", [uid, room_of(ident), act_name])
         elif channel == "TypingNotificationsChannel" and (act_name == "start" or act_name == "stop")
-            cable::broadcast(stream, {"action": act_name, "user": {"id": uid, "name": c["user"]["name"]}})
+            cable::broadcast(stream, {"action": act_name, "user": {"id": uid, "name": c{"user"}{"name"}}})
         xx
         return http::json(200, {})
     xx
@@ -86,7 +86,7 @@ act poll(uid, given)
     if subs == nil => subs |= []
     identifiers | []
     for sub in subs
-        :put_last!(identifiers, sub["identifier"])
+        :put_last!(identifiers, sub{"identifier"})
     xx
     resolved | []
     if :len(identifiers) > 0
@@ -97,12 +97,12 @@ act poll(uid, given)
     rejected | []
     i | 0
     for sub in subs
-        stream | resolved[i]["s"]
+        stream | resolved[i]{"s"}
         if stream == nil
-            :put_last!(rejected, sub["identifier"])
+            :put_last!(rejected, sub{"identifier"})
         elif stream != ""
-            :put_last!(streams, {"stream": stream, "since": sub["since"]})
-            :put_last!(idents, sub["identifier"])
+            :put_last!(streams, {"stream": stream, "since": sub{"since"}})
+            :put_last!(idents, sub{"identifier"})
         xx
         i |= i + 1
     xx
@@ -110,7 +110,7 @@ act poll(uid, given)
     if :len(rejected) == 0 and :len(streams) > 0
         found | db::doc("select campfire_cable_poll($1::json, $2::int)", [:json_stringify(streams), POLL_WAIT_MS])
         for f in found
-            :put_last!(messages, {"identifier": idents[f["i"]], "id": f["id"], "message": f["payload"]})
+            :put_last!(messages, {"identifier": idents[f{"i"}], "id": f{"id"}, "message": f{"payload"}})
         xx
     xx
     return http::json(200, {"messages": messages, "rejected": rejected})

@@ -19,7 +19,7 @@ act find_blob(signed_id)
 xx
 
 act expires(res)
-    :update!(res["headers"]["Cache-Control"], "max-age=300, private")
+    :update!(res{"headers"}{"Cache-Control"}, "max-age=300, private")
     return res
 xx
 
@@ -27,8 +27,8 @@ xx
 act show(c, signed_id)
     b | find_blob(signed_id)
     if b == nil => return http::head(404)
-    url | storage::disk_url(c["req"], b, http::param(c["req"], "disposition"))
-    return expires(http::redirect(c["req"], url))
+    url | storage::disk_url(c{"req"}, b, http::param(c{"req"}, "disposition"))
+    return expires(http::redirect(c{"req"}, url))
 xx
 
 /// GET /rails/active_storage/representations/redirect/:signed_id/:variation_key/*filename
@@ -39,8 +39,8 @@ act representation(c, signed_id, variation_key)
     if v == nil => return http::head(404)
     rep | storage::representation(b, v)
     if rep == nil => return http::head(404)
-    url | storage::disk_url(c["req"], rep, http::param(c["req"], "disposition"))
-    return expires(http::redirect(c["req"], url))
+    url | storage::disk_url(c{"req"}, rep, http::param(c{"req"}, "disposition"))
+    return expires(http::redirect(c{"req"}, url))
 xx
 
 /// GET /rails/active_storage/disk/:encoded_key/*filename
@@ -49,9 +49,9 @@ act disk(c, encoded_key)
     if data == nil => return http::head(404)
     key | :json_parse(data)
     if :is_map(key) == false or :has(key, "key") == false => return http::head(404)
-    path | storage::file_path(key["key"])
+    path | storage::file_path(key{"key"})
     if :file_exists(path) == false => return http::head(404)
-    return http::send_file_as("/_send/" + path, key["content_type"], key["disposition"], "max-age=3600, public")
+    return http::send_file_as("/_send/" + path, key{"content_type"}, key{"disposition"}, "max-age=3600, public")
 xx
 
 /// ActiveStorage::Blobs::ProxyController#show and
@@ -60,27 +60,27 @@ xx
 /// send_blob_byte_range_data sets; otherwise http_cache_forever applies,
 /// its weak ETag being the request's full path.
 act stream(c, b)
-    path | "/_stream/" + storage::file_path(b["key"])
-    disposition | storage::content_disposition(storage::serving_disposition(b, http::param(c["req"], "disposition")), b["filename"])
+    path | "/_stream/" + storage::file_path(b{"key"})
+    disposition | storage::content_disposition(storage::serving_disposition(b, http::param(c{"req"}, "disposition")), b{"filename"})
     if http::header("range") != ""
         res | http::send_file_as(path, storage::serving_type(b), disposition, "no-cache")
-        :update!(res["headers"]["Content-Transfer-Encoding"], "binary")
+        :update!(res{"headers"}{"Content-Transfer-Encoding"}, "binary")
         return res
     xx
     fullpath | http::header("x-request-uri")
-    if fullpath == "" => fullpath |= c["req"]["path"]
+    if fullpath == "" => fullpath |= c{"req"}{"path"}
     etag | "W/\"" + db::value("select left(encode(sha256(convert_to($1, 'UTF8')), 'hex'), 32) as v", [fullpath]) + "\""
     res | http::send_file_as(path, storage::serving_type(b), disposition, "max-age=3155695200, public, immutable")
     if fresh(etag)
         res |= http::response(304, "")
-        :update!(res["headers"]["Cache-Control"], "max-age=3155695200, public, immutable")
+        :update!(res{"headers"}{"Cache-Control"}, "max-age=3155695200, public, immutable")
     xx
     /// nginx serves the file and sets these from the X-Campfire- copies
-    :update!(res["headers"]["X-Campfire-ETag"], etag)
-    :update!(res["headers"]["X-Campfire-Last-Modified"], "Sat, 01 Jan 2011 00:00:00 GMT")
-    if res["status"] == 304
-        :update!(res["headers"]["ETag"], etag)
-        :update!(res["headers"]["Last-Modified"], "Sat, 01 Jan 2011 00:00:00 GMT")
+    :update!(res{"headers"}{"X-Campfire-ETag"}, etag)
+    :update!(res{"headers"}{"X-Campfire-Last-Modified"}, "Sat, 01 Jan 2011 00:00:00 GMT")
+    if res{"status"} == 304
+        :update!(res{"headers"}{"ETag"}, etag)
+        :update!(res{"headers"}{"Last-Modified"}, "Sat, 01 Jan 2011 00:00:00 GMT")
     xx
     return res
 xx
@@ -126,41 +126,41 @@ xx
 /// POST /rails/active_storage/direct_uploads -- DirectUploadsController#create
 act direct_upload(c)
     if session_user(c) == false => return http::head(401)
-    req | c["req"]
-    p | req["params"]
+    req | c{"req"}
+    p | req{"params"}
     spec | {}
-    if :has(p, "blob") and :is_map(p["blob"])
-        spec |= p["blob"]
+    if :has(p, "blob") and :is_map(p{"blob"})
+        spec |= p{"blob"}
     else
         for k in ["filename", "byte_size", "checksum", "content_type"]
-            if :has(p, "blob[" + k + "]") => :update!(spec[k], p["blob[" + k + "]"])
+            if :has(p, "blob[" + k + "]") => :update!(spec{k}, p{"blob[" + k + "]"})
         xx
     xx
     /// params.expect(blob: [...]): ActionController::ParameterMissing
     if :len(:keys(spec)) == 0
         res | http::response(400, "")
-        :update!(res["headers"]["Content-Type"], "text/html; charset=UTF-8")
+        :update!(res{"headers"}{"Content-Type"}, "text/html; charset=UTF-8")
         return res
     xx
     metadata | "\{}"
-    if :has(spec, "metadata") and :is_map(spec["metadata"]) => metadata |= :json_stringify(spec["metadata"])
+    if :has(spec, "metadata") and :is_map(spec{"metadata"}) => metadata |= :json_stringify(spec{"metadata"})
     size | nil
-    if :has(spec, "byte_size") and spec["byte_size"] != nil => size |= :int(:str(spec["byte_size"]))
+    if :has(spec, "byte_size") and spec{"byte_size"} != nil => size |= :int(:str(spec{"byte_size"}))
     b | storage::create_before_direct_upload(field(spec, "filename"), size, field(spec, "checksum"), field(spec, "content_type"), metadata)
-    res | http::response(200, db::value("select campfire_direct_upload_json($1, $2)::text as v", [b["id"], req["base"]]))
-    :update!(res["headers"]["Content-Type"], "application/json; charset=utf-8")
+    res | http::response(200, db::value("select campfire_direct_upload_json($1, $2)::text as v", [b{"id"}, req{"base"}]))
+    :update!(res{"headers"}{"Content-Type"}, "application/json; charset=utf-8")
     return res
 xx
 
 /// ActiveStorageAuthentication: Campfire requires a signed-in session for
 /// the direct-upload endpoints, which Active Storage itself leaves open.
 act session_user(c)
-    return c["user"] != nil and c["authenticated_by"] == "session"
+    return c{"user"} != nil and c{"authenticated_by"} == "session"
 xx
 
 act field(m, k)
-    if :has(m, k) == false or m[k] == nil => return nil
-    return :str(m[k])
+    if :has(m, k) == false or m{k} == nil => return nil
+    return :str(m{k})
 xx
 
 /// PUT /rails/active_storage/disk/:encoded_token -- DiskController#update:
@@ -171,18 +171,18 @@ act disk_update(c, encoded_token)
     raw | db::value("select campfire_as_verified($1, 'blob_token') as v", [encoded_token])
     if raw == nil => return http::head(404)
     token | :json_parse(raw)
-    declared | webhooks::response_content_type(c["req"]["content_type"])
+    declared | webhooks::response_content_type(c{"req"}{"content_type"})
     if declared != nil => declared |= webhooks::mime_lookup(declared)[1]
     length | http::header("content-length")
-    if declared != token["content_type"] or length != :str(token["content_length"]) => return http::head(422)
-    body_file | c["req"]["body_file"]
+    if declared != token{"content_type"} or length != :str(token{"content_length"}) => return http::head(422)
+    body_file | c{"req"}{"body_file"}
     if body_file == "" or :file_exists(body_file) == false => return http::head(422)
-    dest | storage::file_path(token["key"])
+    dest | storage::file_path(token{"key"})
     out | storage::tmp_out()
     if multipart::storage_cmd(["ingest", body_file, dest, out]) == false => return http::head(422)
     f | storage::read_fields(out)
     /// ActiveStorage::IntegrityError
-    if :len(f) < 2 or f[1] != token["checksum"]
+    if :len(f) < 2 or f[1] != token{"checksum"}
         :delete_path!(dest)
         return http::head(422)
     xx

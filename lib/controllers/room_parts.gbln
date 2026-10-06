@@ -12,7 +12,7 @@ import lib/views/sidebar as sidebar_views
 /// RoomScoped: Current.user.memberships.find_by!(room_id:)
 act membership(c, room_id)
     if :is_matching(room_id, "^[0-9]+$") == false => return nil
-    return db::one("select mb.id, mb.involvement, r.id as room_id, r.type, r.name from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and mb.room_id = $2", [c["user"]["id"], :int(room_id)])
+    return db::one("select mb.id, mb.involvement, r.id as room_id, r.type, r.name from memberships mb join rooms r on r.id = mb.room_id where mb.user_id = $1 and mb.room_id = $2", [c{"user"}{"id"}, :int(room_id)])
 xx
 
 /// page_created_since (first 40 after) and page_updated_since (last 40
@@ -37,18 +37,18 @@ select json_build_object(
 act refresh(c, room_id)
     mb | membership(c, room_id)
     if mb == nil => return http::error_page(404)
-    since | http::param(c["req"], "since")
+    since | http::param(c{"req"}, "since")
     if :is_matching(since, "^-?[0-9]+$") == false => since |= "0"
-    data | db::doc(REFRESH_SQL, [mb["room_id"], :int(since)])
+    data | db::doc(REFRESH_SQL, [mb{"room_id"}, :int(since)])
     out | ""
-    if :len(data["created"]) > 0
+    if :len(data{"created"}) > 0
         list | ""
-        for m in data["created"]
+        for m in data{"created"}
             list |= list + message_views::single(c, m)
         xx
-        out |= cable::stream_tag("append", "messages_" + html::room_key({"id": mb["room_id"], "type": mb["type"]}), "\n  " + list + "\n") + "\n"
+        out |= cable::stream_tag("append", "messages_" + html::room_key({"id": mb{"room_id"}, "type": mb{"type"}}), "\n  " + list + "\n") + "\n"
     xx
-    for m in data["updated"]
+    for m in data{"updated"}
         out |= out + cable::stream_tag("replace", message_views::dom(m, ""), message_views::single(c, m)) + "\n"
     xx
     return http::turbo_stream(out)
@@ -58,7 +58,7 @@ HUMANIZE_INVOLVEMENT | {"mentions": "Notifying about @ mentions", "everything": 
 
 act next_involvement(room, involvement)
     order | ["mentions", "everything", "nothing", "invisible"]
-    if room["type"] == "Rooms::Direct" => order |= ["everything", "nothing"]
+    if room{"type"} == "Rooms::Direct" => order |= ["everything", "nothing"]
     i | 0
     for o in order
         if o == involvement and i + 1 < :len(order) => return order[i + 1]
@@ -69,24 +69,24 @@ xx
 
 /// Rooms::InvolvementsHelper#button_to_change_involvement
 act involvement_button(c, room, involvement)
-    id | room["room_id"]
-    key | html::room_key({"id": id, "type": room["type"]})
+    id | room{"room_id"}
+    key | html::room_key({"id": id, "type": room{"type"}})
     nxt | next_involvement(room, involvement)
     bell | html::img("notification-bell-" + involvement + ".svg", "aria-hidden=\"true\" ", 20)
-    label | HUMANIZE_INVOLVEMENT[involvement]
+    label | HUMANIZE_INVOLVEMENT{involvement}
     inner | bell + "<span class=\"for-screen-reader\" id=\"involvement_label_{key}\">{label}</span>"
-    return html::button_to("/rooms/{id}/involvement?involvement={nxt}", "put", "", " role=\"checkbox\" aria-checked=\"true\" aria-labelledby=\"involvement_label_{key}\" tabindex=\"0\" class=\"btn {involvement}\"", inner, c["csrf"])
+    return html::button_to("/rooms/{id}/involvement?involvement={nxt}", "put", "", " role=\"checkbox\" aria-checked=\"true\" aria-labelledby=\"involvement_label_{key}\" tabindex=\"0\" class=\"btn {involvement}\"", inner, c{"csrf"})
 xx
 
 /// GET /rooms/:room_id/involvement
 act involvement(c, room_id)
     mb | membership(c, room_id)
     if mb == nil => return http::error_page(404)
-    id | mb["room_id"]
-    key | html::room_key({"id": id, "type": mb["type"]})
-    button | involvement_button(c, mb, mb["involvement"])
+    id | mb{"room_id"}
+    key | html::room_key({"id": id, "type": mb{"type"}})
+    button | involvement_button(c, mb, mb{"involvement"})
     p | layout::page("Campfire")
-    :update!(p["main"], "<turbo-frame data-controller=\"turbo-frame\" data-action=\"notifications:ready@window-&gt;turbo-frame#load\" data-turbo-frame-url-param=\"/rooms/{id}/involvement\" id=\"involvement_{key}\">\n  {button}\n</turbo-frame>")
+    :update!(p{"main"}, "<turbo-frame data-controller=\"turbo-frame\" data-action=\"notifications:ready@window-&gt;turbo-frame#load\" data-turbo-frame-url-param=\"/rooms/{id}/involvement\" id=\"involvement_{key}\">\n  {button}\n</turbo-frame>")
     return http::html(layout::render(c, p))
 xx
 
@@ -94,19 +94,19 @@ xx
 act update_involvement(c, room_id)
     mb | membership(c, room_id)
     if mb == nil => return http::error_page(404)
-    value | http::param(c["req"], "involvement")
+    value | http::param(c{"req"}, "involvement")
     if :has(HUMANIZE_INVOLVEMENT, value) == false => return http::error_page(500)
-    uid | c["user"]["id"]
-    db::exec("update memberships set involvement = $1, updated_at = utc_now() where id = $2", [value, mb["id"]])
-    previous | mb["involvement"]
-    if mb["type"] != "Rooms::Direct" and value != previous
+    uid | c{"user"}{"id"}
+    db::exec("update memberships set involvement = $1, updated_at = utc_now() where id = $2", [value, mb{"id"}])
+    previous | mb{"involvement"}
+    if mb{"type"} != "Rooms::Direct" and value != previous
         stream | db::value("select campfire_gid_param('User', $1) || ':rooms' as v", [uid])
-        room | {"id": mb["room_id"], "type": mb["type"], "name": mb["name"]}
+        room | {"id": mb{"room_id"}, "type": mb{"type"}, "name": mb{"name"}}
         if value == "invisible"
             cable::broadcast(stream, cable::stream_tag("remove", "list_" + html::room_key(room), nil))
         elif previous == "invisible"
             cable::broadcast(stream, cable::stream_tag("prepend", "shared_rooms", sidebar_views::shared(room, false)))
         xx
     xx
-    return http::redirect(c["req"], "/rooms/" + :str(mb["room_id"]) + "/involvement")
+    return http::redirect(c{"req"}, "/rooms/" + :str(mb{"room_id"}) + "/involvement")
 xx

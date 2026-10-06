@@ -10,12 +10,12 @@ import lib/views/message_edit as edit_views
 /// Current.user.reachable_messages.find(params[:message_id])
 act find(c, message_id)
     if :is_matching(message_id, "^[0-9]+$") == false => return nil
-    return db::doc("select campfire_reachable_message($1, $2, 0, false)", [c["user"]["id"], :int(message_id)])
+    return db::doc("select campfire_reachable_message($1, $2, 0, false)", [c{"user"}{"id"}, :int(message_id)])
 xx
 
 act frame(c, main)
     p | layout::page("Campfire")
-    :update!(p["main"], main)
+    :update!(p{"main"}, main)
     return http::html(layout::render(c, p))
 xx
 
@@ -23,40 +23,40 @@ xx
 act index(c, message_id)
     found | find(c, message_id)
     if found == nil => return http::error_page(404)
-    return frame(c, message_views::boosts(c, found["message"]))
+    return frame(c, message_views::boosts(c, found{"message"}))
 xx
 
 /// GET /messages/:message_id/boosts/new
 act new(c, message_id)
     found | find(c, message_id)
     if found == nil => return http::error_page(404)
-    return frame(c, edit_views::new_boost(c, found["message"]))
+    return frame(c, edit_views::new_boost(c, found{"message"}))
 xx
 
 act room_stream(found)
-    m | found["message"]
-    return db::value("select campfire_gid_param($1, $2) || ':messages'", [found["room_type"], m["room_id"]])
+    m | found{"message"}
+    return db::value("select campfire_gid_param($1, $2) || ':messages'", [found{"room_type"}, m{"room_id"}])
 xx
 
 /// POST /messages/:message_id/boosts
 act create(c, message_id)
     found | find(c, message_id)
     if found == nil => return http::error_page(404)
-    m | found["message"]
-    b | db::doc("select campfire_create_boost($1, $2, $3)", [c["user"]["id"], m["id"], http::param(c["req"], "boost[content]")])
+    m | found{"message"}
+    b | db::doc("select campfire_create_boost($1, $2, $3)", [c{"user"}{"id"}, m{"id"}, http::param(c{"req"}, "boost[content]")])
     sc | c
-    :update!(sc["csrf"], nil)
-    :update!(sc["user"], nil)
-    cable::broadcast(room_stream(found), cable::stream_tag_with("maintain_scroll=\"true\"", "append", "boosts_message_" + m["client_message_id"], message_views::boost(sc, b, m["id"])))
-    return http::redirect(c["req"], "/messages/" + :str(m["id"]) + "/boosts")
+    :update!(sc{"csrf"}, nil)
+    :update!(sc{"user"}, nil)
+    cable::broadcast(room_stream(found), cable::stream_tag_with("maintain_scroll=\"true\"", "append", "boosts_message_" + m{"client_message_id"}, message_views::boost(sc, b, m{"id"})))
+    return http::redirect(c{"req"}, "/messages/" + :str(m{"id"}) + "/boosts")
 xx
 
 /// DELETE /messages/:message_id/boosts/:id -- only the booster's own
 act destroy(c, message_id, id)
     found | find(c, message_id)
     if found == nil or :is_matching(id, "^[0-9]+$") == false => return http::error_page(404)
-    m | found["message"]
-    gone | db::value("delete from boosts where id = $1 and message_id = $2 and booster_id = $3 returning id", [:int(id), m["id"], c["user"]["id"]])
+    m | found{"message"}
+    gone | db::value("delete from boosts where id = $1 and message_id = $2 and booster_id = $3 returning id", [:int(id), m{"id"}, c{"user"}{"id"}])
     if gone == nil => return http::error_page(404)
     cable::broadcast(room_stream(found), cable::stream_tag("remove", "boost_" + id, nil))
     return http::head(204)

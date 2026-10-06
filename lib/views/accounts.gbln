@@ -12,7 +12,7 @@ xx
 
 act edit_nav(c, back_room_id)
     nav | room_forms::back_nav(back_room_id)
-    if c["user"]["role"] == 1
+    if c{"user"}{"role"} == 1
         bot | html::img("bot.svg", "aria-hidden=\"true\" ", 20)
         art | html::img("art.svg", "aria-hidden=\"true\" ", 20)
         nav |= nav + """
@@ -34,13 +34,13 @@ xx
 
 /// accounts/users/_user
 act account_user(c, u)
-    me | c["user"]
-    admin | me["role"] == 1
-    id | u["id"]
+    me | c{"user"}
+    admin | me{"role"} == 1
+    id | u{"id"}
     banned | ""
-    if u["status"] == 2 => banned |= "banned"
+    if u{"status"} == 2 => banned |= "banned"
     avatar | html::avatar_tag(u, "loading=\"lazy\" ")
-    name | html::h(u["name"])
+    name | html::h(u{"name"})
     out | """<li class="flex align-center gap margin-none {banned}">
   <figure class="avatar flex-item-no-shrink" style="--avatar-size: 3.75ch;">
     {avatar}
@@ -53,15 +53,15 @@ act account_user(c, u)
   <hr class="separator" aria-hidden="true">
 
 """
-    if admin and u["status"] == 0
-        if u["role"] != 2
-            token | html::hidden_token(c["csrf"])
+    if admin and u{"status"} == 0
+        if u{"role"} != 2
+            token | html::hidden_token(c{"csrf"})
             role | "Member"
-            if u["role"] == 1 => role |= "Administrator"
+            if u{"role"} == 1 => role |= "Administrator"
             disabled | ""
-            if id == me["id"] => disabled |= " disabled=\"disabled\""
+            if id == me{"id"} => disabled |= " disabled=\"disabled\""
             checked | ""
-            if u["role"] == 1 => checked |= " checked=\"checked\""
+            if u{"role"} == 1 => checked |= " checked=\"checked\""
             crown | html::img("crown.svg", "aria-hidden=\"true\" ", 20)
             out |= out + """      <form data-controller="form" action="/account/users/{id}" accept-charset="UTF-8" method="post"><input type="hidden" name="_method" value="patch" />{token}
         <label class="btn txt-small flex-item-no-shrink" for="role_user_{id}">
@@ -72,12 +72,12 @@ act account_user(c, u)
 </form>
 """
         xx
-        if id != me["id"]
+        if id != me{"id"}
             minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
-            out |= out + "      " + html::button_to("/account/users/{id}", "delete", "", " class=\"btn txt-small flex-item-no-shrink btn--negative\" data-turbo-confirm=\"Are you sure you want to permanently remove this person from the account? This can’t be undone.\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete {name}</span>\n", c["csrf"])
+            out |= out + "      " + html::button_to("/account/users/{id}", "delete", "", " class=\"btn txt-small flex-item-no-shrink btn--negative\" data-turbo-confirm=\"Are you sure you want to permanently remove this person from the account? This can’t be undone.\"", "\n        {minus}\n        <span class=\"for-screen-reader\">Delete {name}</span>\n", c{"csrf"})
         xx
     xx
-    if id == me["id"]
+    if id == me{"id"}
         pencil | html::img("pencil.svg", "aria-hidden=\"true\" ", 20)
         out |= out + "    <a class=\"btn txt-small flex-item-no-shrink\" target=\"_top\" href=\"/users/me/profile\">\n      {pencil}\n      <span class=\"for-screen-reader\">My settings</span>\n</a>"
     xx
@@ -90,29 +90,29 @@ act next_page_container(page)
 xx
 
 act edit(c, admins, members, next_page)
-    me | c["user"]
-    account | c["account"]
-    aid | account["id"]
+    me | c{"user"}
+    account | c{"account"}
+    aid | account{"id"}
     out | "\n\n<section class=\"panel txt-align-center flex flex-column gap\" style=\"view-transition-name: account-settings\">\n"
-    if me["role"] == 1
-        token | html::hidden_token(c["csrf"])
+    if me{"role"} == 1
+        token | html::hidden_token(c{"csrf"})
         camera | html::img("camera.svg", "aria-hidden=\"true\" ", 20)
-        v | account["v"]
+        v | account{"v"}
         logo | html::img_src("/account/logo?v={v}", "role=\"presentation\" data-upload-preview-target=\"image\" ", 48)
         file | "<input class=\"input\" accept=\"image/*\" data-action=\"upload-preview#previewImage change-&gt;form#submit\" type=\"file\" name=\"account[logo]\" id=\"account_logo\" />"
         delete_logo | ""
-        if account["has_logo"]
+        if account{"has_logo"}
             minus | html::img("minus.svg", "aria-hidden=\"true\" ", 20)
-            delete_logo |= "        " + html::button_to("/account/logo?v={v}", "delete", "", " class=\"btn btn--negative txt-small avatar__delete-btn\"", "\n          {minus}\n          <span class=\"for-screen-reader\">Delete logo</span>\n", c["csrf"])
+            delete_logo |= "        " + html::button_to("/account/logo?v={v}", "delete", "", " class=\"btn btn--negative txt-small avatar__delete-btn\"", "\n          {minus}\n          <span class=\"for-screen-reader\">Delete logo</span>\n", c{"csrf"})
         xx
         tr | html::translation_button("account_name")
-        name | html::h(account["name"])
+        name | html::h(account{"name"})
         check | html::img("check.svg", "aria-hidden=\"true\" ", 20)
         crown | html::img("crown.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 18)
         restricted | false
-        settings | account["settings"]
+        settings | account{"settings"}
         if settings != nil and :has(settings, "restrict_room_creation_to_administrators")
-            rv | settings["restrict_room_creation_to_administrators"]
+            rv | settings{"restrict_room_creation_to_administrators"}
             restricted |= rv == true or rv == "true"
         xx
         blank8 | "        "
@@ -175,7 +175,7 @@ act edit(c, admins, members, next_page)
 """
     else
         logo_tag | html::account_logo_tag(account, "txt-xx-large center")
-        name | html::h(account["name"])
+        name | html::h(account{"name"})
         out |= out + "    {logo_tag}\n    <h1 class=\"flex-item-grow txt-x-large\">{name}</h1>\n"
     xx
     invite | room_views::invite(c)
@@ -198,12 +198,12 @@ xx
 
 /// accounts/custom_styles/edit
 act custom_styles(c)
-    token | html::hidden_token(c["csrf"])
-    base | c["req"]["base"]
+    token | html::hidden_token(c{"csrf"})
+    base | c{"req"}{"base"}
     tr | html::translation_button("custom_styles")
     alert | html::img("alert.svg", "class=\"flex-inline colorize--black\" aria-hidden=\"true\" ", 16)
     styles | ""
-    if c["account"]["custom_styles"] != nil => styles |= html::h(c["account"]["custom_styles"])
+    if c{"account"}{"custom_styles"} != nil => styles |= html::h(c{"account"}{"custom_styles"})
     check | html::img("check.svg", "aria-hidden=\"true\" ", 20)
     return """
 
@@ -244,14 +244,14 @@ xx
 
 /// accounts/bots/_bot
 act bot(c, b)
-    id | b["id"]
+    id | b{"id"}
     avatar | html::avatar_tag(b, "loading=\"lazy\" ")
-    name | html::h(b["name"])
+    name | html::h(b{"name"})
     pencil | html::img("pencil.svg", "aria-hidden=\"true\" ", 20)
     rooms | ""
-    for r in b["rooms"]
-        rname | html::h(r["name"])
-        url | c["req"]["base"] + "/rooms/" + :str(r["id"]) + "/" + b["bot_key"] + "/messages"
+    for r in b{"rooms"}
+        rname | html::h(r{"name"})
+        url | c{"req"}{"base"} + "/rooms/" + :str(r{"id"}) + "/" + b{"bot_key"} + "/messages"
         text_line | "curl -d 'Hello!' " + url
         upload_line | "curl -F \"attachment=@/path/to/file\" " + url
         text_value | html::h(text_line)
@@ -346,16 +346,16 @@ xx
 act bot_form(b)
     camera | html::img("camera.svg", "aria-hidden=\"true\" ", 20)
     avatar | html::img("default-bot-avatar.svg", "alt=\"Bot avatar\" data-upload-preview-target=\"image\" ", 48)
-    if b != nil and :has(b, "avatar_url") => avatar |= html::img_src(b["avatar_url"], "alt=\"Bot avatar\" data-upload-preview-target=\"image\" ", 48)
+    if b != nil and :has(b, "avatar_url") => avatar |= html::img_src(b{"avatar_url"}, "alt=\"Bot avatar\" data-upload-preview-target=\"image\" ", 48)
     tr_name | html::translation_button("bot_name")
     tr_url | html::translation_button("webhook_url")
     name_value | ""
     url_value | ""
     if b != nil
-        nv | html::h(b["name"])
+        nv | html::h(b{"name"})
         name_value |= " value=\"{nv}\""
-        if b["webhook_url"] != nil
-            uv | html::h(b["webhook_url"])
+        if b{"webhook_url"} != nil
+            uv | html::h(b{"webhook_url"})
             url_value |= " value=\"{uv}\""
         xx
     xx
@@ -396,7 +396,7 @@ act bot_form(b)
 xx
 
 act bot_new(c)
-    token | html::hidden_token(c["csrf"])
+    token | html::hidden_token(c{"csrf"})
     form | bot_form(nil)
     return """
 
@@ -408,15 +408,15 @@ act bot_new(c)
 xx
 
 act bot_edit(c, b)
-    id | b["id"]
-    token | html::hidden_token(c["csrf"])
+    id | b{"id"}
+    token | html::hidden_token(c{"csrf"})
     form | bot_form(b)
     trash | html::img("trash.svg", "aria-hidden=\"true\" ", 20)
     bot_img | html::img("bot.svg", "aria-hidden=\"true\" ", 20)
     refresh | html::img("refresh.svg", "aria-hidden=\"true\" ", 20)
     key | html::img("key.svg", "aria-hidden=\"true\" ", 20)
-    delete | html::button_to("/account/bots/{id}", "delete", "", " class=\"btn txt--small btn--negative\" aria-label=\"Delete this chat bot\" data-turbo-confirm=\"Are you sure you want to permanently remove this bot from the account? This can’t be undone.\"", "\n      {trash}\n      {bot_img}\n", c["csrf"])
-    rekey | html::button_to("/account/bots/{id}/key", "put", "", " class=\"btn full-width txt--small btn--negative\" aria-label=\"Generate a new key\" data-turbo-confirm=\"Are you sure you want to change the bot key? All usage of this bot must be updated.\"", "\n      {refresh}\n      {key}\n", c["csrf"])
+    delete | html::button_to("/account/bots/{id}", "delete", "", " class=\"btn txt--small btn--negative\" aria-label=\"Delete this chat bot\" data-turbo-confirm=\"Are you sure you want to permanently remove this bot from the account? This can’t be undone.\"", "\n      {trash}\n      {bot_img}\n", c{"csrf"})
+    rekey | html::button_to("/account/bots/{id}/key", "put", "", " class=\"btn full-width txt--small btn--negative\" aria-label=\"Generate a new key\" data-turbo-confirm=\"Are you sure you want to change the bot key? All usage of this bot must be updated.\"", "\n      {refresh}\n      {key}\n", c{"csrf"})
     return """
 
 <section class="panel" style="view-transition-name: chat-bot-{id}">

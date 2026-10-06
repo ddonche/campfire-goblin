@@ -10,21 +10,21 @@ import lib/views/onboarding as onboarding_views
 
 act signup_page(c, title, nav, main)
     p | layout::page(title)
-    :update!(p["body_class"], "signup")
-    :update!(p["nav"], nav)
-    :update!(p["main"], main)
+    :update!(p{"body_class"}, "signup")
+    :update!(p{"nav"}, nav)
+    :update!(p{"main"}, main)
     return http::html(layout::render(c, p))
 xx
 
 act user_param(c, name)
     key | "user[" + name + "]"
-    if http::has_param(c["req"], key) == false => return nil
-    return http::param(c["req"], key)
+    if http::has_param(c{"req"}, key) == false => return nil
+    return http::param(c{"req"}, key)
 xx
 
 act has_user_params(c)
     for f in ["name", "email_address", "password", "avatar"]
-        if http::has_param(c["req"], "user[" + f + "]") => return true
+        if http::has_param(c{"req"}, "user[" + f + "]") => return true
     xx
     return false
 xx
@@ -37,27 +37,27 @@ xx
 
 /// GET /first_run
 act first_run(c)
-    if account_exists() => return http::redirect(c["req"], "/")
+    if account_exists() => return http::redirect(c{"req"}, "/")
     return signup_page(c, "Set up Campfire", "", onboarding_views::first_run(c))
 xx
 
 /// POST /first_run -- FirstRun.create!
 act create_first_run(c)
-    if account_exists() => return http::redirect(c["req"], "/")
+    if account_exists() => return http::redirect(c{"req"}, "/")
     if has_user_params(c) == false => return http::head(400)
     code | auth::alphanumeric(4) + "-" + auth::alphanumeric(4) + "-" + auth::alphanumeric(4)
     uid | db::value("select campfire_first_run($1, $2, $3, $4) as id", [code, user_param(c, "name"), user_param(c, "email_address"), user_param(c, "password")])
-    if uid == nil => return http::redirect(c["req"], "/")
+    if uid == nil => return http::redirect(c{"req"}, "/")
     c |= auth::start_session(c, uid)
-    return auth::keep(c, http::redirect(c["req"], "/"))
+    return auth::keep(c, http::redirect(c{"req"}, "/"))
 xx
 
 /// ---------- join ----------
 
 /// require_unauthenticated_access and verify_join_code
 act join_guard(c, code)
-    if auth::signed_in(c) => return http::redirect(c["req"], "/")
-    if c["account"]["join_code"] != code => return http::head(404)
+    if auth::signed_in(c) => return http::redirect(c{"req"}, "/")
+    if c{"account"}{"join_code"} != code => return http::head(404)
     return nil
 xx
 
@@ -79,10 +79,10 @@ act create_user(c, code)
     if uid == nil
         target | "/session/new"
         if email != nil => target |= target + "?email_address=" + http::url_encode(email)
-        return http::redirect(c["req"], target)
+        return http::redirect(c{"req"}, target)
     xx
     c |= auth::start_session(c, uid)
-    return auth::keep(c, http::redirect(c["req"], "/"))
+    return auth::keep(c, http::redirect(c{"req"}, "/"))
 xx
 
 /// ---------- session transfers ----------
@@ -90,7 +90,7 @@ xx
 /// GET /session/transfers/:id
 act transfer(c, id)
     p | layout::page("Campfire")
-    :update!(p["main"], onboarding_views::transfer(c, id))
+    :update!(p{"main"}, onboarding_views::transfer(c, id))
     return http::html(layout::render(c, p))
 xx
 
@@ -99,7 +99,7 @@ act update_transfer(c, id)
     uid | db::value("select u.id from users u where u.status = 0 and u.id = campfire_user_from_transfer_id($1)", [id])
     if uid == nil => return http::head(400)
     c |= auth::start_session(c, uid)
-    req | c["req"]
+    req | c{"req"}
     back | http::cookie_of(req, "return_to")
     res | http::redirect(req, "/")
     if back != ""

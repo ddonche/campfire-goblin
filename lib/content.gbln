@@ -109,9 +109,9 @@ xx
 
 /// Goblin passes maps by value, so tree edits return the edited node.
 act add_kid(parent, node)
-    kids | parent["kids"]
+    kids | parent{"kids"}
     :put_last!(kids, node)
-    :update!(parent["kids"], kids)
+    :update!(parent{"kids"}, kids)
     return parent
 xx
 
@@ -143,7 +143,7 @@ act parse(src)
             depth | :len(stack) - 1
             found | -1
             while depth > 0 and found < 0
-                if stack[depth]["name"] == name => found |= depth
+                if stack[depth]{"name"} == name => found |= depth
                 depth |= depth - 1
             xx
             if found > 0
@@ -186,24 +186,24 @@ act serialize_attrs(attrs)
 xx
 
 act serialize(node)
-    if node["t"] == "text" => return escape_text(node["text"])
-    if node["t"] == "raw" => return node["html"]
+    if node{"t"} == "text" => return escape_text(node{"text"})
+    if node{"t"} == "raw" => return node{"html"}
     inner | ""
-    for k in node["kids"]
+    for k in node{"kids"}
         inner |= inner + serialize(k)
     xx
-    name | node["name"]
+    name | node{"name"}
     if name == "#root" => return inner
-    a | serialize_attrs(node["attrs"])
+    a | serialize_attrs(node{"attrs"})
     if :has(VOID, name) => return "<" + name + a + ">"
     return "<" + name + a + ">" + inner + "</" + name + ">"
 xx
 
 act text_of(node)
-    if node["t"] == "text" => return node["text"]
+    if node{"t"} == "text" => return node{"text"}
     out | ""
     if :has(node, "kids")
-        for k in node["kids"]
+        for k in node{"kids"}
             out |= out + text_of(k)
         xx
     xx
@@ -239,15 +239,15 @@ xx
 /// content, attributes outside the Action Text list are dropped.
 act filter_tree(node)
     kept | []
-    for k in node["kids"]
-        if k["t"] == "text"
+    for k in node{"kids"}
+        if k{"t"} == "text"
             :put_last!(kept, k)
-        elif :has(FILTER_TAGS, k["name"])
-            :update!(k["attrs"], scrub_attrs(k["attrs"], FILTER_ATTRS))
+        elif :has(FILTER_TAGS, k{"name"})
+            :update!(k{"attrs"}, scrub_attrs(k{"attrs"}, FILTER_ATTRS))
             :put_last!(kept, filter_tree(k))
         xx
     xx
-    :update!(node["kids"], kept)
+    :update!(node{"kids"}, kept)
     return node
 xx
 
@@ -255,14 +255,14 @@ xx
 /// (script/style-like ones are dropped), attributes outside it removed.
 act final_tree(node)
     kept | []
-    for k in node["kids"]
-        if k["t"] == "el"
+    for k in node{"kids"}
+        if k{"t"} == "el"
             k |= final_tree(k)
-            if :has(FINAL_TAGS, k["name"])
-                :update!(k["attrs"], scrub_attrs(k["attrs"], FINAL_ATTRS))
+            if :has(FINAL_TAGS, k{"name"})
+                :update!(k{"attrs"}, scrub_attrs(k{"attrs"}, FINAL_ATTRS))
                 :put_last!(kept, k)
-            elif :has(DROP_CONTENT, k["name"]) == false
-                for g in k["kids"]
+            elif :has(DROP_CONTENT, k{"name"}) == false
+                for g in k{"kids"}
                     :put_last!(kept, g)
                 xx
             xx
@@ -270,7 +270,7 @@ act final_tree(node)
             :put_last!(kept, k)
         xx
     xx
-    :update!(node["kids"], kept)
+    :update!(node{"kids"}, kept)
     return node
 xx
 
@@ -278,9 +278,9 @@ xx
 
 act find_attachments(node, found)
     out | found
-    for k in node["kids"]
-        if k["t"] == "el"
-            if k["name"] == "action-text-attachment"
+    for k in node{"kids"}
+        if k{"t"} == "el"
+            if k{"name"} == "action-text-attachment"
                 :put_last!(out, k)
             else
                 out |= find_attachments(k, out)
@@ -292,11 +292,11 @@ xx
 
 /// ActionText::Attachment::OpengraphEmbed.attributes_from_node
 act opengraph_attrs(el)
-    filename | attr_value(el["attrs"], "filename")
+    filename | attr_value(el{"attrs"}, "filename")
     if filename != nil and filename != ""
-        return {"href": attr_value(el["attrs"], "href"), "url": attr_value(el["attrs"], "url"), "filename": filename, "description": attr_value(el["attrs"], "caption")}
+        return {"href": attr_value(el{"attrs"}, "href"), "url": attr_value(el{"attrs"}, "url"), "filename": filename, "description": attr_value(el{"attrs"}, "caption")}
     xx
-    c | attr_value(el["attrs"], "content")
+    c | attr_value(el{"attrs"}, "content")
     if c == nil => c |= ""
     tree | parse(c)
     title | find_class(tree, "og-embed__title")
@@ -308,20 +308,20 @@ act opengraph_attrs(el)
     desc | find_class(tree, "og-embed__description")
     out | {"href": nil, "url": nil, "filename": nil, "description": nil}
     if link != nil
-        :update!(out["href"], attr_value(link["attrs"], "href"))
-        :update!(out["filename"], :trim(text_of(link)))
+        :update!(out{"href"}, attr_value(link{"attrs"}, "href"))
+        :update!(out{"filename"}, :trim(text_of(link)))
     elif title != nil
-        :update!(out["filename"], :trim(text_of(title)))
+        :update!(out{"filename"}, :trim(text_of(title)))
     xx
-    if img != nil => :update!(out["url"], attr_value(img["attrs"], "src"))
-    if desc != nil => :update!(out["description"], :trim(text_of(desc)))
+    if img != nil => :update!(out{"url"}, attr_value(img{"attrs"}, "src"))
+    if desc != nil => :update!(out{"description"}, :trim(text_of(desc)))
     return out
 xx
 
 act find_class(node, klass)
-    for k in node["kids"]
-        if k["t"] == "el"
-            cls | attr_value(k["attrs"], "class")
+    for k in node{"kids"}
+        if k{"t"} == "el"
+            cls | attr_value(k{"attrs"}, "class")
             if cls != nil and :has(:split(cls, " "), klass) => return k
             r | find_class(k, klass)
             if r != nil => return r
@@ -331,9 +331,9 @@ act find_class(node, klass)
 xx
 
 act find_tag(node, name)
-    for k in node["kids"]
-        if k["t"] == "el"
-            if k["name"] == name => return k
+    for k in node{"kids"}
+        if k{"t"} == "el"
+            if k{"name"} == name => return k
             r | find_tag(k, name)
             if r != nil => return r
         xx
@@ -351,7 +351,7 @@ act web_url(c, value)
     li | :len(labels) - 1
     last | labels[li]
     if :is_matching(last, "(?i)[a-z]") == false or :is_matching(last, "(?i)^0x") => return nil
-    own | :lower(c["req"]["host"])
+    own | :lower(c{"req"}{"host"})
     colon | :find(own, ":")
     if colon != nil => own |= own[0:colon]
     if :ends_with(host, ".") => host |= html::chop(host, 1)
@@ -367,10 +367,10 @@ xx
 
 act render_opengraph(c, el)
     a | opengraph_attrs(el)
-    href | web_url(c, a["href"])
-    url | web_url(c, a["url"])
-    filename | html::h(truncate(a["filename"], 280))
-    desc | html::h(truncate(a["description"], 560))
+    href | web_url(c, a{"href"})
+    url | web_url(c, a{"url"})
+    filename | html::h(truncate(a{"filename"}, 280))
+    desc | html::h(truncate(a{"description"}, 560))
     tw | ""
     if url != nil and :starts_with(url, "https://pbs.twimg.com/profile_images") => tw |= "og-embed--twitter-avatar"
     title | filename
@@ -403,36 +403,36 @@ xx
 
 /// users/_mention, as it comes out of the final sanitize.
 act render_mention(user)
-    id | user["id"]
-    title | html::h(user["title"])
-    src | html::h(user["avatar"])
-    name | html::h(user["name"])
+    id | user{"id"}
+    title | html::h(user{"title"})
+    src | html::h(user{"avatar"})
+    name | html::h(user{"name"})
     return "<span class=\"mention\"><a title=\"{title}\" class=\"btn avatar\" href=\"/users/{id}\"><img src=\"{src}\" width=\"48\" height=\"48\"></a> {name}</span>"
 xx
 
 act render_attachment(c, m, el)
-    ctype | attr_value(el["attrs"], "content-type")
+    ctype | attr_value(el{"attrs"}, "content-type")
     if ctype == OPENGRAPH_TYPE => return render_opengraph(c, el)
-    sgid | attr_value(el["attrs"], "sgid")
-    mentions | m["mentions"]
-    if sgid != nil and mentions != nil and :has(mentions, sgid) => return render_mention(mentions[sgid])
+    sgid | attr_value(el{"attrs"}, "sgid")
+    mentions | m{"mentions"}
+    if sgid != nil and mentions != nil and :has(mentions, sgid) => return render_mention(mentions{sgid})
     /// ActionText::Attachables::MissingAttachable
     return "☒"
 xx
 
 act replace_attachments(c, m, node)
     out | []
-    for k in node["kids"]
-        if k["t"] == "el" and k["name"] == "action-text-attachment"
-            for g in parse(render_attachment(c, m, k))["kids"]
+    for k in node{"kids"}
+        if k{"t"} == "el" and k{"name"} == "action-text-attachment"
+            for g in parse(render_attachment(c, m, k)){"kids"}
                 :put_last!(out, g)
             xx
         else
-            if k["t"] == "el" => k |= replace_attachments(c, m, k)
+            if k{"t"} == "el" => k |= replace_attachments(c, m, k)
             :put_last!(out, k)
         xx
     xx
-    :update!(node["kids"], out)
+    :update!(node{"kids"}, out)
     return node
 xx
 
@@ -441,31 +441,31 @@ xx
 act remove_solo_unfurled(c, root, plain)
     previews | []
     for a in find_attachments(root, [])
-        if attr_value(a["attrs"], "content-type") == OPENGRAPH_TYPE => :put_last!(previews, a)
+        if attr_value(a{"attrs"}, "content-type") == OPENGRAPH_TYPE => :put_last!(previews, a)
     xx
     if :len(previews) != 1 => return root
-    href | opengraph_attrs(previews[0])["href"]
+    href | opengraph_attrs(previews[0]){"href"}
     href |= web_url(c, href)
     if href == nil => return root
     if normalize_tweet_url(href) != normalize_tweet_url(:trim(plain)) => return root
     if find_tag(root, "div") != nil
         kids | []
-        for k in root["kids"]
-            if k["t"] == "el" and k["name"] == "div" => :update!(k["kids"], [previews[0]])
+        for k in root{"kids"}
+            if k{"t"} == "el" and k{"name"} == "div" => :update!(k{"kids"}, [previews[0]])
             :put_last!(kids, k)
         xx
-        :update!(root["kids"], kids)
+        :update!(root{"kids"}, kids)
         return root
     xx
     kept | []
-    for k in root["kids"]
-        if k["t"] == "el" and k["name"] == "p"
+    for k in root{"kids"}
+        if k{"t"} == "el" and k{"name"} == "p"
             if find_tag(k, "action-text-attachment") != nil => :put_last!(kept, k)
         else
             :put_last!(kept, k)
         xx
     xx
-    :update!(root["kids"], kept)
+    :update!(root{"kids"}, kept)
     return root
 xx
 
@@ -528,19 +528,19 @@ xx
 
 act auto_link(node)
     out | []
-    for k in node["kids"]
-        if k["t"] == "text"
-            for n in link_text(k["text"])
+    for k in node{"kids"}
+        if k{"t"} == "text"
+            for n in link_text(k{"text"})
                 :put_last!(out, n)
             xx
         else
-            if k["t"] == "el" and k["name"] != "a" and k["name"] != "pre" and k["name"] != "code"
+            if k{"t"} == "el" and k{"name"} != "a" and k{"name"} != "pre" and k{"name"} != "code"
                 k |= auto_link(k)
             xx
             :put_last!(out, k)
         xx
     xx
-    :update!(node["kids"], out)
+    :update!(node{"kids"}, out)
     return node
 xx
 
@@ -548,15 +548,15 @@ xx
 
 /// ActionText::Content#to_plain_text (enough for emoji, /play and search).
 act plain_text(m)
-    if :has(m, "plain") => return m["plain"]
-    body | m["body"]
+    if :has(m, "plain") => return m{"plain"}
+    body | m{"body"}
     if body == nil => return ""
     t | body
     /// attachable_plain_text_representation: mentions read as "@Name"
-    if :has(t, "action-text-attachment") and :has(m, "mentions") and m["mentions"] != nil
-        users | m["mentions"]
+    if :has(t, "action-text-attachment") and :has(m, "mentions") and m{"mentions"} != nil
+        users | m{"mentions"}
         for sgid in :keys(users)
-            t |= :update_matching(t, "<action-text-attachment[^>]*sgid=\"" + sgid + "\"[^>]*>(</action-text-attachment>)?", "@" + users[sgid]["name"])
+            t |= :update_matching(t, "<action-text-attachment[^>]*sgid=\"" + sgid + "\"[^>]*>(</action-text-attachment>)?", "@" + users{sgid}{"name"})
         xx
     xx
     if :has(t, "<")
@@ -572,7 +572,7 @@ xx
 /// filename.
 act plain_text_body(m)
     t | plain_text(m)
-    if t == "" and m["attachment"] != nil => return m["attachment"]["filename"]
+    if t == "" and m{"attachment"} != nil => return m{"attachment"}{"filename"}
     return t
 xx
 
@@ -583,7 +583,7 @@ act all_emoji(s)
 xx
 
 act rich_text(c, m)
-    body | m["body"]
+    body | m{"body"}
     /// A message with no rich text at all (an attachment posted by a bot)
     /// renders as nothing, as ActionText::RichText#to_s does.
     if body == nil => return ""
@@ -598,7 +598,7 @@ act rich_text(c, m)
 xx
 
 act presentation(c, m)
-    att | m["attachment"]
+    att | m{"attachment"}
     if att != nil => return attachment(c, m, att)
     plain | plain_text(m)
     if :starts_with(plain, "/play ")
@@ -616,10 +616,10 @@ act attachment(c, m, att)
     b | att
     blob_url | storage::blob_path(b, "")
     download_url | storage::blob_path(b, "attachment")
-    name | html::h(b["filename"])
+    name | html::h(b{"filename"})
     if storage::previewable(b) or storage::variable(b)
         dims | preview_dimensions(b)
-        if :starts_with(b["content_type"], "video/")
+        if :starts_with(b{"content_type"}, "video/")
             poster | html::h(storage::representation_path(b, storage::poster_variation()))
             inner | "<video src=\"" + html::h(blob_url) + "\" poster=\"{poster}\" controls=\"controls\" preload=\"none\" width=\"100%\" height=\"100%\" class=\"message__attachment\"></video>"
             return dimension_constraints(dims, inner)
@@ -672,16 +672,16 @@ ATTACHMENT_ATTRS | {"sgid": 1, "content-type": 1, "url": 1, "href": 1, "filename
 
 act canonical_tree(node)
     kept | []
-    for k in node["kids"]
-        if k["t"] == "el" and k["name"] == "action-text-attachment"
-            :update!(k["attrs"], scrub_attrs(k["attrs"], ATTACHMENT_ATTRS))
-            :update!(k["kids"], [])
-        elif k["t"] == "el"
+    for k in node{"kids"}
+        if k{"t"} == "el" and k{"name"} == "action-text-attachment"
+            :update!(k{"attrs"}, scrub_attrs(k{"attrs"}, ATTACHMENT_ATTRS))
+            :update!(k{"kids"}, [])
+        elif k{"t"} == "el"
             k |= canonical_tree(k)
         xx
         :put_last!(kept, k)
     xx
-    :update!(node["kids"], kept)
+    :update!(node{"kids"}, kept)
     return node
 xx
 
@@ -709,16 +709,16 @@ xx
 /// `users` maps stored sgids to users (with a fresh "sgid").
 act editable_tree(c, node, users)
     kept | []
-    for k in node["kids"]
-        if k["t"] == "el" and k["name"] == "action-text-attachment"
-            sgid | attr_value(k["attrs"], "sgid")
+    for k in node{"kids"}
+        if k{"t"} == "el" and k{"name"} == "action-text-attachment"
+            sgid | attr_value(k{"attrs"}, "sgid")
             user | nil
-            if sgid != nil and users != nil and :has(users, sgid) => user |= users[sgid]
+            if sgid != nil and users != nil and :has(users, sgid) => user |= users{sgid}
             if user != nil
-                partial | "<span class=\"mention\" sgid=\"" + user["sgid"] + "\">" + html::avatar_tag(user, "") + " " + html::h(user["name"]) + "</span>"
+                partial | "<span class=\"mention\" sgid=\"" + user{"sgid"} + "\">" + html::avatar_tag(user, "") + " " + html::h(user{"name"}) + "</span>"
                 attrs | []
                 has_type | false
-                for a in k["attrs"]
+                for a in k{"attrs"}
                     if a[0] == "content-type"
                         :put_last!(attrs, ["content-type", MENTION_TYPE])
                         has_type |= true
@@ -728,15 +728,15 @@ act editable_tree(c, node, users)
                 xx
                 if has_type == false => :put_last!(attrs, ["content-type", MENTION_TYPE])
                 :put_last!(attrs, ["content", json_html(partial)])
-                :update!(k["attrs"], attrs)
+                :update!(k{"attrs"}, attrs)
             xx
-            :update!(k["kids"], [])
-        elif k["t"] == "el"
+            :update!(k{"kids"}, [])
+        elif k{"t"} == "el"
             k |= editable_tree(c, k, users)
         xx
         :put_last!(kept, k)
     xx
-    :update!(node["kids"], kept)
+    :update!(node{"kids"}, kept)
     return node
 xx
 

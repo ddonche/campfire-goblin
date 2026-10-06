@@ -9,7 +9,7 @@
 
 act all(sql, params)
     row | :db_query_one("select coalesce((select json_agg(q) from (" + sql + ") q), '[]')::text as j", params)
-    return :json_parse(row["j"])
+    return :json_parse(row{"j"})
 xx
 
 act one(sql, params)
@@ -22,8 +22,8 @@ xx
 act doc(sql, params)
     row | :db_query_one("select (" + sql + ")::text as j", params)
     if row == nil => return nil
-    if row["j"] == nil => return nil
-    return :json_parse(row["j"])
+    if row{"j"} == nil => return nil
+    return :json_parse(row{"j"})
 xx
 
 act exec(sql, params)
@@ -35,7 +35,7 @@ act value(sql, params)
     row | :db_query_one(sql, params)
     if row == nil => return nil
     for k in :keys(row)
-        return row[k]
+        return row{k}
     xx
     return nil
 xx

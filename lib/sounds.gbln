@@ -64,22 +64,22 @@ SOUNDS | {
 
 act find(name)
     if :has(SOUNDS, name) == false => return nil
-    s | SOUNDS[name]
-    :update!(s["name"], name)
+    s | SOUNDS{name}
+    :update!(s{"name"}, name)
     return s
 xx
 
 /// MessagesHelper#message_sound_presentation
 act presentation(s)
-    url | html::asset(s["name"] + ".mp3")
+    url | html::asset(s{"name"} + ".mp3")
     inner | ""
     if :has(s, "image")
-        src | html::asset(s["image"])
-        w | s["width"]
-        h | s["height"]
+        src | html::asset(s{"image"})
+        w | s{"width"}
+        h | s{"height"}
         inner |= "<img width=\"{w}\" height=\"{h}\" class=\"align--middle\" src=\"{src}\" />"
     else
-        inner |= html::h(s["text"])
+        inner |= html::h(s{"text"})
     xx
     return "<div class=\"sound\" data-controller=\"sound\" data-action=\"messages:play-&gt;sound#play\" data-sound-url-value=\"{url}\"><button class=\"btn btn--plain\" data-action=\"sound#play\">🔊</button>{inner}</div>"
 xx

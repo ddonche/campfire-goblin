@@ -9,23 +9,23 @@ import lib/views/pwa as pwa
 import lib/views/messages as message_views
 
 act room_path_kind(room)
-    t | room["type"]
+    t | room{"type"}
     if t == "Rooms::Open" => return "opens"
     if t == "Rooms::Closed" => return "closeds"
     return "directs"
 xx
 
 act bell(c, room)
-    id | room["id"]
+    id | room{"id"}
     involvement_id | "involvement_" + html::room_key(room)
     what | "room"
-    if room["type"] == "Rooms::Direct" => what |= "Ping"
+    if room{"type"} == "Rooms::Direct" => what |= "Ping"
     loading | html::img("notification-bell-loading.svg", "aria-hidden=\"true\" ", 20)
     alert | html::img("notification-bell-alert.svg", "aria-hidden=\"true\" hidden=\"hidden\" ", 20)
     alert48 | html::img("notification-bell-alert.svg", "aria-hidden=\"true\" ", 48)
     remove | html::img("remove.svg", "aria-hidden=\"true\" ", 20)
-    p | platform::parse(c["req"]["user_agent"])
-    root_url | c["req"]["base"] + "/"
+    p | platform::parse(c{"req"}{"user_agent"})
+    root_url | c{"req"}{"base"} + "/"
     browser | pwa::browser_settings(p, root_url)
     system | pwa::system_settings(p)
     install | pwa::install_instructions(p)
@@ -69,12 +69,12 @@ act bell(c, room)
 xx
 
 act nav(c, room, display_name)
-    id | room["id"]
+    id | room{"id"}
     logo | ""
-    if c["account"]["has_logo"] => logo |= html::account_logo_tag(c["account"], "")
+    if c{"account"}{"has_logo"} => logo |= html::account_logo_tag(c{"account"}, "")
     ping | ""
     what | "room"
-    if room["type"] == "Rooms::Direct"
+    if room{"type"} == "Rooms::Direct"
         ping |= "\n        <span class=\"for-screen-reader\">Ping with</span>\n"
         what |= "Ping"
     xx
@@ -99,8 +99,8 @@ act nav(c, room, display_name)
 xx
 
 act invite(c)
-    account | c["account"]
-    url | c["req"]["base"] + "/join/" + account["join_code"]
+    account | c{"account"}
+    url | c{"req"}{"base"} + "/join/" + account{"join_code"}
     qr_id | http::urlsafe_b64(url)
     person | html::img("person-add.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
     qr | html::img("qr-code.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
@@ -108,8 +108,8 @@ act invite(c)
     share | html::img("share.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
     refresh | html::img("refresh.svg", "aria-hidden=\"true\" class=\"colorize--black\" ", 20)
     regen | ""
-    if c["user"]["role"] == 1
-        token | c["csrf"]
+    if c{"user"}{"role"} == 1
+        token | c{"csrf"}
         regen |= """      <form class="button_to" method="post" action="/account/join_code"><button class="btn btn--regenerate" type="submit">
         {refresh}
         <span class="for-screen-reader">Regenerate join link</span>
@@ -144,7 +144,7 @@ act invite(c)
 xx
 
 act invitation(c)
-    logo | html::account_logo_tag(c["account"], "center margin-block-end txt-large")
+    logo | html::account_logo_tag(c{"account"}, "center margin-block-end txt-large")
     t | html::translation_button("invite_message")
     inv | invite(c)
     return """  <div id="system_welcome" class="message message--formatted txt-align-center center">
@@ -167,9 +167,9 @@ act invitation(c)
 xx
 
 act composer(c, room)
-    id | room["id"]
-    token | c["csrf"]
-    base | c["req"]["base"]
+    id | room{"id"}
+    token | c{"csrf"}
+    base | c{"req"}{"base"}
     search | html::img("search.svg", "aria-hidden=\"true\" ", 20)
     hint | html::img("messages-outlined.svg", "aria-hidden=\"true\" class=\"composer__input-hint colorize--black\" style=\"view-transition-name: input-btn;\" ", 22)
     attach | html::img("attachment.svg", "class=\"colorize--black\" aria-hidden=\"true\" ", 22)
@@ -231,16 +231,16 @@ xx
 
 /// The main content of rooms/show.
 act show_main(c, data)
-    room | data["room"]
-    id | room["id"]
-    base | c["req"]["base"]
+    room | data{"room"}
+    id | room{"id"}
+    base | c{"req"}{"base"}
     key | html::room_key(room)
     tmpl | message_views::template(c)
-    loaded | room["updated_epoch"]
+    loaded | room{"updated_epoch"}
     inv | ""
-    if data["original"] and data["paged"] == false => inv |= invitation(c)
-    list | message_views::collection(c, data["messages"])
-    stream | data["stream"]
+    if data{"original"} and data{"paged"} == false => inv |= invitation(c)
+    list | message_views::collection(c, data{"messages"})
+    stream | data{"stream"}
     down | html::img("arrow-down.svg", "aria-hidden=\"true\" ", 20)
     return """
 
