@@ -86,7 +86,7 @@ act new_boost(c, m)
           <span class="for-screen-reader">{name}</span>
         </figure>
 
-        <input autofocus="autofocus" autocomplete="off" autocorrect="off" maxlength="16" required="required" pattern="\\S+.*" data-boost-form-target="input" class="input input--boost txt-small" size="16" type="text" name="boost[content]" />
+        <input autofocus="autofocus" autocomplete="off" autocorrect="off" maxlength="16" required="required" pattern="\S+.*" data-boost-form-target="input" class="input input--boost txt-small" size="16" type="text" name="boost[content]" />
       </label>
 
       <button name="button" type="submit" class="btn btn--reversed">
