@@ -1,0 +1,105 @@
+/// lib/realtime.gbln -- the broadcast hub: ActionCable's pub/sub in one actor.
+///
+/// config/startup.gbln starts it once per server as `realtime`. Requests
+/// never share its memory: they post messages to it, and it answers on a
+/// channel the request brought along.
+///
+///   {"broadcast": streams, "message": m}      add m to each stream
+///   {"wait": subs, "reply": ch}               answer with the broadcasts
+///                                             after each sub's "since",
+///                                             now or as soon as one arrives
+///   {"cursor": true, "reply": ch}             answer with the newest id
+///   {"forget": ch}                            drop a wait that timed out
+///
+/// subs: [{"i": position, "stream": name, "since": id}, ...]. An answer is
+/// [{"i": position, "id": id, "payload": message}, ...] in id order.
+///
+/// The hub keeps the newest KEEP broadcasts, so a poll that comes back a
+/// little late still gets what it missed. Ids start from the clock at
+/// startup, so a browser's cursor from before a restart is never ahead.
+
+KEEP | 2000
+
+/// The hub's state when the server starts; `first_id` comes from the clock.
+act fresh(first_id)
+    return {"next": first_id, "log": [], "waiters": []}
+xx
+
+act hub(state, msg)
+    if :has(msg, "broadcast") => return add(state, msg{"broadcast"}, msg{"message"})
+    if :has(msg, "wait") => return wait(state, msg{"wait"}, msg{"reply"})
+    if :has(msg, "cursor")
+        answer(msg{"reply"}, state{"next"} - 1)
+        return state
+    xx
+    if :has(msg, "forget") => return forget(state, msg{"forget"})
+    return state
+xx
+
+act add(state, streams, message)
+    log | state{"log"}
+    id | state{"next"}
+    added | []
+    for stream in streams
+        entry | {"id": id, "stream": stream, "payload": message}
+        :put_last!(log, entry)
+        :put_last!(added, entry)
+        id |= id + 1
+    xx
+    while :len(log) > KEEP
+        :delete_first!(log)
+    xx
+    waiting | []
+    for w in state{"waiters"}
+        found | matches(added, w{"subs"})
+        if :len(found) > 0
+            answer(w{"reply"}, found)
+        else
+            :put_last!(waiting, w)
+        xx
+    xx
+    return {"next": id, "log": log, "waiters": waiting}
+xx
+
+act wait(state, subs, reply)
+    found | matches(state{"log"}, subs)
+    if :len(found) > 0
+        answer(reply, found)
+        return state
+    xx
+    waiters | state{"waiters"}
+    :put_last!(waiters, {"subs": subs, "reply": reply})
+    return {"next": state{"next"}, "log": state{"log"}, "waiters": waiters}
+xx
+
+act forget(state, reply)
+    waiting | []
+    for w in state{"waiters"}
+        if w{"reply"} != reply => :put_last!(waiting, w)
+    xx
+    return {"next": state{"next"}, "log": state{"log"}, "waiters": waiting}
+xx
+
+/// The entries after each sub's cursor on its stream, in id order.
+act matches(entries, subs)
+    found | []
+    for e in entries
+        for s in subs
+            if e{"stream"} == s{"stream"} and e{"id"} > s{"since"}
+                :put_last!(found, {"i": s{"i"}, "id": e{"id"}, "payload": e{"payload"}})
+            xx
+        xx
+    xx
+    return found
+xx
+
+/// A request that gave up waiting has stopped listening; its answer is
+/// dropped, and the next poll gets the same broadcasts from the log.
+act answer(reply, value)
+    attempt
+        :post(reply, value)
+    rescue e
+        return nil
+    xx
+    return nil
+xx

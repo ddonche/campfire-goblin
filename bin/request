@@ -14,4 +14,6 @@ if os.environ.get("ACCEPT"): h["accept"] = os.environ["ACCEPT"]
 h.update(json.loads(os.environ.get("HEADERS") or "{}"))
 print(json.dumps(h))' "$2" "$3")
 if [ -n "$4" ]; then f=$(mktemp); printf '%s' "$4" > "$f"; export GOBLIN_REQUEST_FILE="$f"; fi
+# The server's startup script runs first, as `goblin start --startup` runs it.
+export GOBLIN_STARTUP=config/startup.gbln
 exec ${GOBLIN:-goblin} app/api/app.gbln

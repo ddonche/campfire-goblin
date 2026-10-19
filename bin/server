@@ -15,9 +15,10 @@ mkdir -p "$ROOT/storage/jobs" "$ROOT/tmp/log"
 mkdir -p tmp/log tmp/nginx
 sed -e "s|@ROOT@|$ROOT|g" -e "s|@PORT@|$PORT|g" -e "s|@GOBLIN_PORT@|$GOBLIN_PORT|g" config/nginx.conf > tmp/nginx.conf
 
-# goblin-host runs each request as a `goblin` process in this directory, so
-# module imports (lib/...) resolve from the repository root.
-goblin start --host 127.0.0.1 --port "$GOBLIN_PORT" > tmp/log/goblin.log 2>&1 &
+# goblin-host runs from this directory, so module imports (lib/...) resolve
+# from the repository root. config/startup.gbln starts the realtime hub and
+# the job workers once; every request can post to them.
+env -u PORT goblin start --host 127.0.0.1 --port "$GOBLIN_PORT" --startup config/startup.gbln > tmp/log/goblin.log 2>&1 &
 GOBLIN_PID=$!
 trap 'kill $GOBLIN_PID 2>/dev/null || true' EXIT
 

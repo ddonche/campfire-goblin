@@ -1,7 +1,7 @@
 /// lib/controllers/cable.gbln -- ActionCable's server side over long polling.
 ///
-/// goblin-host runs one short-lived process per request and has no
-/// WebSocket support, so cable/goblin_cable.js stands in for the browser's
+/// goblin-host answers each request once and has no WebSocket support, so
+/// cable/goblin_cable.js stands in for the browser's
 /// WebSocket on /cable and speaks to this endpoint with JSON POSTs:
 ///
 ///   connect      ApplicationCable::Connection#connect
@@ -17,7 +17,7 @@ import lib/http as http
 import lib/db as db
 import lib/cable as cable
 
-POLL_WAIT_MS | 20000
+POLL_WAIT | 20s
 
 act stream_for(user_id, identifier)
     return db::value("select campfire_cable_stream($1, $2) as v", [user_id, identifier])
@@ -36,6 +36,15 @@ act room_of(ident)
     return :int(s)
 xx
 
+/// PresenceChannel's present: the membership is marked connected and read,
+/// and the user's other tabs hear that the room was read.
+act present(uid, room_id)
+    if db::value("select campfire_presence($1, $2, 'present') as v", [uid, room_id]) == true
+        cable::broadcast("user_" + :str(uid) + "_reads", {"room_id": room_id})
+    xx
+    return nil
+xx
+
 act handle(c)
     req | c{"req"}
     /// ActionCable's allowed_request_origins: same origin only.
@@ -48,7 +57,7 @@ act handle(c)
     p | req{"params"}
     command | http::param(req, "command")
     if command == "connect"
-        return http::json(200, {"cursor": db::value("select campfire_cable_cursor() as v", [])})
+        return http::json(200, {"cursor": cable::cursor()})
     xx
     if command == "poll" => return poll(uid, p{"subscriptions"})
     identifier | http::param(req, "identifier")
@@ -57,8 +66,9 @@ act handle(c)
     channel | ident{"channel"}
     if command == "subscribe"
         if stream == nil => return http::json(200, {"type": "reject_subscription"})
-        if channel == "PresenceChannel" => db::exec("select campfire_presence($1, $2, 'present')", [uid, room_of(ident)])
-        return http::json(200, {"type": "confirm_subscription", "since": db::value("select campfire_cable_cursor() as v", [])})
+        if channel == "PresenceChannel" => present(uid, room_of(ident))
+        since | cable::cursor()
+        return http::json(200, {"type": "confirm_subscription", "since": since})
     xx
     if stream == nil => return http::json(200, {"type": "reject_subscription"})
     if command == "unsubscribe"
@@ -70,7 +80,9 @@ act handle(c)
         raw | http::param(req, "data")
         if :starts_with(:trim(raw), "\{") => data |= :json_parse(raw)
         act_name | data{"action"}
-        if channel == "PresenceChannel" and (act_name == "present" or act_name == "absent" or act_name == "refresh")
+        if channel == "PresenceChannel" and act_name == "present"
+            present(uid, room_of(ident))
+        elif channel == "PresenceChannel" and (act_name == "absent" or act_name == "refresh")
             db::exec("select campfire_presence($1, $2, $3)", [uid, room_of(ident), act_name])
         elif channel == "TypingNotificationsChannel" and (act_name == "start" or act_name == "stop")
             cable::broadcast(stream, {"action": act_name, "user": {"id": uid, "name": c{"user"}{"name"}}})
@@ -78,6 +90,14 @@ act handle(c)
         return http::json(200, {})
     xx
     return http::json(400, {"error": "unknown command"})
+xx
+
+/// A cursor from the browser: a whole number, or 0.
+act since_of(v)
+    if v == nil => return 0
+    s | :str(v)
+    if :is_matching(s, "^[0-9]+$") == false => return 0
+    return :int(s)
 xx
 
 /// subscriptions: [{"identifier": ..., "since": broadcast id}, ...]
@@ -108,7 +128,13 @@ act poll(uid, given)
     xx
     messages | []
     if :len(rejected) == 0 and :len(streams) > 0
-        found | db::doc("select campfire_cable_poll($1::json, $2::int)", [:json_stringify(streams), POLL_WAIT_MS])
+        subs_for_hub | []
+        n | 0
+        for s in streams
+            :put_last!(subs_for_hub, {"i": n, "stream": s{"stream"}, "since": since_of(s{"since"})})
+            n |= n + 1
+        xx
+        found | cable::wait(subs_for_hub, POLL_WAIT)
         for f in found
             :put_last!(messages, {"identifier": idents[f{"i"}], "id": f{"id"}, "message": f{"payload"}})
         xx

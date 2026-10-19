@@ -1,21 +1,39 @@
 /// lib/cable.gbln -- ActionCable.server.broadcast and Turbo's broadcast_*_to.
 ///
-/// goblin-host cannot hold a WebSocket open, so broadcasts are rows in
-/// cable_broadcasts that the /cable long-poll endpoint delivers. Each row's
-/// payload is the JSON message ActionCable would send to subscribers.
-
-import lib/db as db
+/// Broadcasts go to the `realtime` hub actor that config/startup.gbln starts
+/// (lib/realtime.gbln); the /cable long poll waits on it. Each message is the
+/// one ActionCable would send to subscribers.
 
 act broadcast(stream, message)
-    db::exec("insert into cable_broadcasts (stream, payload) values ($1, $2)", [stream, :json_stringify(message)])
+    :post(realtime, {"broadcast": [stream], "message": message})
     return nil
 xx
 
-/// One statement for many streams (a fan-out to each member, say).
+/// One message for many streams (a fan-out to each member, say).
 act broadcast_many(streams, message)
     if :len(streams) == 0 => return nil
-    db::exec("insert into cable_broadcasts (stream, payload) select s, $2 from json_array_elements_text($1::json) s", [:json_stringify(streams), :json_stringify(message)])
+    :post(realtime, {"broadcast": streams, "message": message})
     return nil
+xx
+
+/// The newest broadcast id: where a new subscription starts reading.
+act cursor()
+    reply | :channel(1)
+    :post(realtime, {"cursor": true, "reply": reply})
+    return :receive(reply, 10s)
+xx
+
+/// The broadcasts after each sub's "since" on its stream, waiting up to
+/// `limit` for the first one. subs: [{"i", "stream", "since"}, ...]
+act wait(subs, limit)
+    reply | :channel(1)
+    :post(realtime, {"wait": subs, "reply": reply})
+    found | :receive(reply, limit)
+    if found == nil
+        :post(realtime, {"forget": reply})
+        return []
+    xx
+    return found
 xx
 
 /// turbo_stream_action_tag with extra attributes (written before action and

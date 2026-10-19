@@ -2,9 +2,9 @@
 /// Bot::WebhookJob and Webhook#deliver.
 ///
 /// Rails enqueues a job per eligible bot and a Resque worker POSTs the
-/// message to the bot's URL. Here the request writes a job file to
-/// storage/jobs and starts jobs/webhook.gbln as a detached `goblin run`
-/// process, so the response does not wait on the bot. That process POSTs
+/// message to the bot's URL. Here the request hands the job to a job worker
+/// actor (lib/jobs.gbln), so the response does not wait on the bot. The
+/// worker POSTs
 /// with curl (bin/net: Goblin has no HTTP client) and turns the bot's answer
 /// into a message exactly as Webhook#deliver does: a 200 text/html or
 /// text/plain body becomes a text message, any other response with a
@@ -100,9 +100,8 @@ act deliver_later(m)
     root | multipart::root()
     for bot in bots
         id | :str(:secure_random(100000000, 999999999)) + :str(:secure_random(100000000, 999999999))
-        job | root + "/" + JOBS + "/" + id + ".json"
-        :write_text!(job, :json_stringify({"bot_key": bot{"bot_key"}, "url": bot{"url"}, "message_id": m{"id"}}))
-        :run_cmd("JOB=" + multipart::shq(job) + " setsid goblin run jobs/webhook.gbln >> " + multipart::shq(root + "/tmp/log/jobs.log") + " 2>&1 < /dev/null &", root)
+        worker | :secure_random(0, :len(job_workers) - 1)
+        :post(job_workers[worker], {"kind": "webhook", "bot_key": bot{"bot_key"}, "url": bot{"url"}, "message_id": m{"id"}, "dir": root + "/" + JOBS + "/" + id + ".d"})
     xx
     return nil
 xx
@@ -124,8 +123,9 @@ act payload(bot, m)
     ]))
 xx
 
-/// Webhook#post: returns {"status", "content_type", "exit", "body_path"}
-act post(url, body, dir)
+/// Webhook#post: returns {"status", "content_type", "exit", "body_path"}. Named
+/// deliver here: a module's own `post` action would hide the `:post` builtin.
+act deliver(url, body, dir)
     :write_text!(dir + ".payload", body)
     :run_cmd("bash " + multipart::shq(multipart::root() + "/bin/net") + " post " + multipart::shq(url) + " " + multipart::shq(dir + ".payload") + " " + :str(endpoint_timeout()) + " " + multipart::shq(dir))
     meta | ["000", "", "1"]

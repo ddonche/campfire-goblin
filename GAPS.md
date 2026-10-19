@@ -6,7 +6,9 @@ has no built-in way to do the job. Each entry below covers what is missing,
 why Campfire needs it, what the port does instead, and the smallest
 general-purpose addition to Goblin that would remove the workaround.
 
-Goblin, goblin-host and Sheriff were not modified. Short scripts that show
+The port was written against an unmodified Goblin. Since then it uses one
+addition, Goblin's actors and the startup script (`goblin start --startup`),
+for realtime broadcasts and background jobs (sections 1 and 8). Short scripts that show
 the interpreter problems are in [`docs/goblin-repros/`](docs/goblin-repros/).
 Run them with `goblin run` from that directory.
 
@@ -17,21 +19,24 @@ Run them with `goblin run` from that directory.
 **Why Campfire needs it.** ActionCable over a WebSocket carries new messages,
 presence, typing indicators, unread badges and room list updates.
 
-**What goblin-host does.** It runs one short-lived `goblin` process per
-request and returns one response. It cannot upgrade a connection or keep one
-open.
+**What goblin-host does.** It runs each request in its own VM and returns
+one response. It cannot upgrade a connection or keep one open.
 
 **What the port does.** `cable/goblin_cable.js` stands in for the browser's
 `WebSocket` on `/cable`. It speaks the ActionCable protocol over JSON POSTs,
 and broadcasts arrive through a 20-second long poll
-(`lib/controllers/cable.gbln`). Broadcasts are rows in `cable_broadcasts`.
-The page loads one extra script, so the realtime transport differs from
-Rails. Message rendering and stream names are the same.
+(`lib/controllers/cable.gbln`). Broadcasts go to the `realtime` hub actor,
+which `config/startup.gbln` starts once per server (`lib/realtime.gbln`). A
+poll posts its streams to the hub with a channel to answer on, and waits on
+that channel with `:receive(channel, 20s)`, so it holds no database
+connection while it waits. The page loads one extra script, so the realtime
+transport differs from Rails. Message rendering and stream names are the
+same.
 
 **Smallest addition.** WebSocket upgrade in goblin-host: hand an upgraded
 connection to a script that can `:ws_receive` and `:ws_send` until it closes.
-A host-level pub/sub primitive, letting a script block on a channel, would
-also replace the polling table.
+(The hub actor already replaced the polling table this section used to
+describe.)
 
 ### 2. SQLite
 
@@ -128,12 +133,13 @@ surrogate pairs above U+FFFF.
 **Why Campfire needs it.** Webhook delivery and Web Push run outside the
 request: Resque jobs and a thread pool in Rails.
 
-**What the port does.** The request writes a job file and starts
-`setsid goblin run jobs/<name>.gbln … &` through `:run_cmd`. The job imports
-the app's modules and talks to Postgres directly.
+**What the port does.** Webhook delivery runs in four job worker actors
+that `config/startup.gbln` starts (`lib/jobs.gbln`); the request posts the
+job to one and answers without waiting. Web Push still writes a job file and
+starts `setsid goblin run jobs/push.gbln … &` through `:run_cmd`.
 
-**Smallest addition.** A `:spawn(script, env)` builtin that starts a detached
-script, or a job queue in goblin-host.
+**Smallest addition.** None left for webhooks. Web Push can move to the job
+workers the same way.
 
 ### 9. Images and video
 

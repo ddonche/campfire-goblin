@@ -86,17 +86,20 @@ browser ── nginx (:3002) ─┬─ public/ and fingerprinted assets
   The decisions stay in Goblin, for example which addresses are public,
   what a webhook reply means, and the GCM tag.
 - **Background jobs.** Rails runs webhook delivery and Web Push in Resque and
-  a thread pool. Here they are `goblin run jobs/*.gbln` processes, started
-  detached by the request.
+  a thread pool. Here webhooks run in job worker actors started by
+  `config/startup.gbln` (`lib/jobs.gbln`); Web Push is a `goblin run
+  jobs/push.gbln` process, started detached by the request.
 - **Realtime.** goblin-host can't hold a WebSocket, so
   `cable/goblin_cable.js` carries the ActionCable protocol over POSTs and a
-  long poll (`lib/controllers/cable.gbln`).
+  long poll (`lib/controllers/cable.gbln`). Broadcasts go through the
+  `realtime` hub actor (`lib/realtime.gbln`).
 
 ## Running it
 
 Requirements:
 
-- Goblin built at the commit in EXPERIMENT.md (`goblin` on `PATH`)
+- Goblin with actors and startup scripts (`goblin start --startup`,
+  goblin-lang's `vm-startup` branch until it is merged; `goblin` on `PATH`)
 - Postgres with pgcrypto
 - nginx
 - curl, openssl, ffmpeg/ffprobe, file, getent, iconv and basenc

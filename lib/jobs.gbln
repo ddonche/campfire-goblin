@@ -1,0 +1,46 @@
+/// lib/jobs.gbln -- background jobs, as Rails' job workers run them.
+///
+/// config/startup.gbln starts a few worker actors (`job_workers`) that run
+/// `work`; a request posts a job to one of them and answers without waiting
+/// for it (lib/webhooks.gbln). A job that fails is logged to tmp/log/jobs.log and
+/// the worker carries on with the next one.
+
+import lib/db as db
+import lib/auth as auth
+import lib/webhooks as webhooks
+import lib/controllers/messages as messages
+import lib/multipart as multipart
+
+act work(state, job)
+    attempt
+        if job{"kind"} == "webhook" => webhook(job)
+    rescue e
+        :append_file!(multipart::root() + "/tmp/log/jobs.log", "job failed: " + :json_stringify(job) + ": {e}\n")
+    xx
+    return state + 1
+xx
+
+/// Bot::WebhookJob#perform. The reply is created as the bot, like any
+/// message, and broadcast as Rails broadcasts from a job: rendered with no
+/// request, so absolute URLs use ApplicationController.renderer's default
+/// host, example.org.
+act webhook(job)
+    m | db::doc("select campfire_message_json(m) from messages m where m.id = $1", [job{"message_id"}])
+    req | {"method": "POST", "path": "/", "query": "", "params": {"bot_key": job{"bot_key"}}, "files": {}, "parts_dir": "", "body": "", "content_type": "", "cookies": {}, "accept": "", "user_agent": "", "host": "example.org", "base": "http://example.org", "ip": "127.0.0.1", "turbo_frame": "", "referrer": "", "xhr": false}
+    c | auth::context(req)
+    if m == nil or c{"user"} == nil => return nil
+    dir | job{"dir"}
+    bot | {"name": c{"user"}{"name"}, "bot_key": job{"bot_key"}}
+    res | webhooks::deliver(job{"url"}, webhooks::payload(bot, m), dir)
+    reply | webhooks::reply_for(res)
+    room | db::one("select id, type from rooms where id = $1", [m{"room_id"}])
+    if reply != nil and room != nil
+        if :has(reply, "text")
+            messages::post(c, room, reply{"text"}, "")
+        else
+            messages::post_with(c, room, nil, "", reply{"upload"})
+        xx
+    xx
+    :run_cmd("rm -rf '" + dir + "' '" + dir + ".payload'")
+    return nil
+xx
