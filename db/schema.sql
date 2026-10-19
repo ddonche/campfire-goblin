@@ -191,16 +191,6 @@ CREATE TABLE message_search_index (
 );
 CREATE INDEX index_message_search_index_on_tsv ON message_search_index USING gin (tsv);
 
--- Realtime: ActionCable broadcasts are stored here and delivered to browsers by
--- the polling cable shim (Goblin's host has no WebSocket or streaming support).
-CREATE TABLE cable_broadcasts (
-  id bigserial PRIMARY KEY,
-  stream varchar NOT NULL,
-  payload text NOT NULL,
-  created_at timestamp(6) NOT NULL DEFAULT (now() AT TIME ZONE 'utc')
-);
-CREATE INDEX index_cable_broadcasts_on_stream_and_id ON cable_broadcasts (stream, id);
-
 -- Signing. Goblin has no hashing or HMAC builtins, so Rails-format signed
 -- messages (base64(data) "--" hex HMAC-SHA256) are produced and checked by
 -- pgcrypto. Keys are what Rails' key generator derives from secret_key_base
@@ -551,22 +541,22 @@ BEGIN
 END $$;
 
 -- Membership::Connectable, as PresenceChannel calls it. p_action is
--- present, absent or refresh.
+-- present, absent or refresh. False when the user has no membership in the
+-- room. After `present`, lib/controllers/cable.gbln broadcasts the read to
+-- the user's other tabs.
 CREATE FUNCTION campfire_presence(p_user bigint, p_room bigint, p_action text)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS boolean LANGUAGE plpgsql AS $$
 DECLARE
   mb memberships;
   ts timestamp := utc_now();
   connected boolean;
 BEGIN
   SELECT * INTO mb FROM memberships WHERE user_id = p_user AND room_id = p_room;
-  IF mb.id IS NULL THEN RETURN; END IF;
+  IF mb.id IS NULL THEN RETURN false; END IF;
   connected := mb.connected_at IS NOT NULL AND mb.connected_at >= ts - interval '60 seconds';
   IF p_action = 'present' THEN
     UPDATE memberships SET connections = CASE WHEN connected THEN mb.connections + 1 ELSE 1 END,
       connected_at = ts, unread_at = NULL WHERE id = mb.id;
-    INSERT INTO cable_broadcasts (stream, payload)
-    VALUES ('user_' || p_user || '_reads', json_build_object('room_id', p_room)::text);
   ELSIF p_action = 'absent' THEN
     UPDATE memberships SET connections = CASE WHEN connected THEN mb.connections - 1 ELSE 0 END, updated_at = ts
     WHERE id = mb.id;
@@ -575,30 +565,8 @@ BEGIN
     UPDATE memberships SET connections = CASE WHEN connected THEN mb.connections ELSE mb.connections + 1 END,
       connected_at = ts, updated_at = ts WHERE id = mb.id;
   END IF;
+  RETURN true;
 END $$;
-
--- Waits up to p_wait_ms for broadcasts on the given streams. p_subs is
--- [{"stream": ..., "since": id}, ...]; returns [{"i": index, "id": id, "payload": json}].
-CREATE FUNCTION campfire_cable_poll(p_subs json, p_wait_ms int)
-RETURNS json LANGUAGE plpgsql VOLATILE AS $$
-DECLARE
-  result json;
-  deadline timestamptz := clock_timestamp() + make_interval(secs => p_wait_ms / 1000.0);
-BEGIN
-  LOOP
-    SELECT json_agg(json_build_object('i', s.i - 1, 'id', b.id, 'payload', b.payload::json) ORDER BY b.id) INTO result
-    FROM json_array_elements(p_subs) WITH ORDINALITY AS s(sub, i)
-    JOIN cable_broadcasts b ON b.stream = s.sub->>'stream' AND b.id > (s.sub->>'since')::bigint;
-    IF result IS NOT NULL OR clock_timestamp() >= deadline THEN
-      RETURN coalesce(result, '[]'::json);
-    END IF;
-    PERFORM pg_sleep(0.1);
-  END LOOP;
-END $$;
-
-CREATE FUNCTION campfire_cable_cursor() RETURNS bigint LANGUAGE sql STABLE AS $$
-  SELECT coalesce(max(id), 0) FROM cable_broadcasts
-$$;
 
 -- Zlib.crc32, for Users::AvatarsHelper#avatar_background_color.
 CREATE FUNCTION campfire_crc32(data text) RETURNS bigint LANGUAGE plpgsql IMMUTABLE AS $$

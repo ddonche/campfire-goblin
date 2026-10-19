@@ -1,0 +1,16 @@
+/// config/startup.gbln -- runs once when the server starts (bin/server
+/// passes it to `goblin start --startup`). Every request gets its own copy
+/// of the variables below; the actors are shared and live until the server
+/// stops.
+
+import lib/db as db
+import lib/realtime as hub
+import lib/jobs as jobs
+
+/// ActionCable's pub/sub (lib/realtime.gbln). Broadcast ids continue from
+/// the clock, in microseconds, so they keep growing across restarts.
+realtime | :actor(hub::fresh(:int(db::value("select (extract(epoch from clock_timestamp()) * 1000000)::bigint::text as v", []))), hub::hub, {mailbox: 10000})
+
+/// Background jobs (lib/jobs.gbln): bot webhooks run here, after the request
+/// that triggered them has been answered, as Rails' job workers run them.
+job_workers | [:actor(0, jobs::work), :actor(0, jobs::work), :actor(0, jobs::work), :actor(0, jobs::work)]
