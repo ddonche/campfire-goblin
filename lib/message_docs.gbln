@@ -1,0 +1,85 @@
+/// lib/message_docs.gbln
+/// The message documents the views render (what Postgres' campfire_message_json
+/// built for one message at a time), for a whole page of messages at once.
+///
+/// One query fetches the page's plain rows: the messages, their bodies, the
+/// boosts, the mentions found in the bodies, and each user, room and
+/// attachment once. The documents are put together here. Building them in
+/// Postgres cost ~0.7 ms per message, because Postgres plans the nested
+/// helper functions again on every call.
+
+import lib/db as db
+
+DOCS_SQL | """
+with ids as (select unnest($1::bigint[]) as id),
+m as (select m.* from messages m where m.id in (select id from ids)),
+rt as (select record_id as id, body from action_text_rich_texts
+       where record_type = 'Message' and name = 'body' and record_id in (select id from ids)),
+men as (select distinct m.id, (regexp_matches(rt.body, 'sgid="([^"]+)"', 'g'))[1] as sgid from m join rt on rt.id = m.id),
+men_users as (select men.id, men.sgid,
+                substring(campfire_unb64(split_part(men.sgid, '--', 1)) from 'gid://campfire/User/([0-9]+)')::bigint as user_id
+              from men),
+b as (select b.* from boosts b where b.message_id in (select id from ids)),
+uids as (select creator_id as id from m union select booster_id from b union select user_id from men_users)
+select json_build_object(
+  'messages', (select coalesce(json_agg(json_build_object(
+      'id', m.id, 'client_message_id', m.client_message_id, 'creator_id', m.creator_id, 'room_id', m.room_id,
+      'created_iso', campfire_iso(m.created_at), 'created_epoch', campfire_epoch(m.created_at),
+      'updated_epoch', campfire_epoch(m.updated_at), 'body', rt.body)), '[]')
+    from m left join rt on rt.id = m.id),
+  'users', (select coalesce(json_object_agg(u.id, campfire_user_json(u)), '{}') from users u where u.id in (select id from uids)),
+  'rooms', (select coalesce(json_object_agg(r.id, campfire_room_json(r)), '{}') from rooms r where r.id in (select room_id from m)),
+  'boosts', (select coalesce(json_agg(json_build_object('message_id', b.message_id, 'id', b.id, 'content', b.content,
+      'booster_id', b.booster_id) order by b.created_at, b.id), '[]') from b join users bu on bu.id = b.booster_id),
+  'mentions', (select coalesce(json_agg(json_build_object('message_id', mu.id, 'sgid', mu.sgid, 'user_id', mu.user_id)), '[]')
+    from men_users mu join users u on u.id = mu.user_id),
+  'attachments', (select coalesce(json_object_agg(a.record_id, campfire_attached('Message', a.record_id, 'attachment')), '{}')
+    from (select distinct record_id from active_storage_attachments
+          where record_type = 'Message' and name = 'attachment' and record_id in (select id from ids)) a))
+"""
+
+/// The documents for these message ids, in the same order.
+act load(ids)
+    if :len(ids) == 0 => return []
+    strs | []
+    for id in ids
+        :put_last!(strs, :str(id))
+    xx
+    d | db::doc(DOCS_SQL, ["\{" + :join(strs, ",") + "}"])
+    users | d{"users"}
+    boosts | {}
+    for b in d{"boosts"}
+        key | :str(b{"message_id"})
+        if :has(boosts, key) == false => :update!(boosts{key}, [])
+        :put_last!(boosts{key}, {"id": b{"id"}, "content": b{"content"}, "booster": users{:str(b{"booster_id"})}})
+    xx
+    mentions | {}
+    for x in d{"mentions"}
+        key | :str(x{"message_id"})
+        if :has(mentions, key) == false => :update!(mentions{key}, {})
+        :update!(mentions{key}{x{"sgid"}}, users{:str(x{"user_id"})})
+    xx
+    found | {}
+    for row in d{"messages"}
+        key | :str(row{"id"})
+        doc | row
+        :update!(doc{"creator"}, users{:str(row{"creator_id"})})
+        :update!(doc{"room"}, d{"rooms"}{:str(row{"room_id"})})
+        list | []
+        if :has(boosts, key) => list |= boosts{key}
+        :update!(doc{"boosts"}, list)
+        men | nil
+        if :has(mentions, key) => men |= mentions{key}
+        :update!(doc{"mentions"}, men)
+        att | nil
+        if :has(d{"attachments"}, key) => att |= d{"attachments"}{key}
+        :update!(doc{"attachment"}, att)
+        :update!(found{key}, doc)
+    xx
+    out | []
+    for id in ids
+        key | :str(id)
+        if :has(found, key) => :put_last!(out, found{key})
+    xx
+    return out
+xx

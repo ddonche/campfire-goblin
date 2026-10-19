@@ -3,6 +3,7 @@
 
 import lib/http as http
 import lib/db as db
+import lib/message_docs as message_docs
 import lib/html as html
 import lib/cable as cable
 import lib/views/layout as layout
@@ -29,8 +30,8 @@ created as (
     order by m.created_at desc, m.id desc limit 40) u
 )
 select json_build_object(
-  'created', (select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from created x),
-  'updated', (select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from updated x))
+  'created', (select coalesce(json_agg(x.id order by x.created_at, x.id), '[]') from created x),
+  'updated', (select coalesce(json_agg(x.id order by x.created_at, x.id), '[]') from updated x))
 """
 
 /// GET /rooms/:room_id/refresh?since=<ms>
@@ -40,6 +41,8 @@ act refresh(c, room_id)
     since | http::param(c{"req"}, "since")
     if :is_matching(since, "^-?[0-9]+$") == false => since |= "0"
     data | db::doc(REFRESH_SQL, [mb{"room_id"}, :int(since)])
+    :update!(data{"created"}, message_docs::load(data{"created"}))
+    :update!(data{"updated"}, message_docs::load(data{"updated"}))
     out | ""
     if :len(data{"created"}) > 0
         list | ""

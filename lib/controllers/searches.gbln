@@ -2,6 +2,7 @@
 
 import lib/http as http
 import lib/db as db
+import lib/message_docs as message_docs
 import lib/views/layout as layout
 import lib/views/searches as search_views
 
@@ -11,7 +12,7 @@ import lib/views/searches as search_views
 SEARCH_SQL | """
 select json_build_object(
   'messages', (
-    select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from (
+    select coalesce(json_agg(x.id order by x.created_at, x.id), '[]') from (
       select m.* from messages m
       join memberships mb on mb.room_id = m.room_id and mb.user_id = $1
       join message_search_index idx on idx.rowid = m.id
@@ -45,6 +46,7 @@ act index(c)
     term | ""
     if q != nil => term |= q
     data | db::doc(SEARCH_SQL, [c{"user"}{"id"}, term, :int(last)])
+    :update!(data{"messages"}, message_docs::load(data{"messages"}))
     raw | nil
     if http::has_param(req, "q") => raw |= http::param(req, "q")
     p | layout::page("Search")
