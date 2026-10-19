@@ -3,6 +3,7 @@
 import lib/http as http
 import lib/auth as auth
 import lib/db as db
+import lib/message_docs as message_docs
 import lib/storage as storage
 import lib/ojson as ojson
 import lib/html as html
@@ -20,7 +21,7 @@ PAGE_SQL | """
 select json_build_object(
   'room_id', mb.room_id,
   'messages', (
-    select coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]') from (
+    select coalesce(json_agg(x.id order by x.created_at, x.id), '[]') from (
       select * from (select * from messages where room_id = mb.room_id and $3 = 0 and $4 = 0 order by created_at desc, id desc limit 40) last_page
       union all
       select * from (select m.* from messages m, messages a where a.id = $3 and a.room_id = mb.room_id and m.room_id = mb.room_id
@@ -37,7 +38,7 @@ from memberships mb where mb.user_id = $1 and mb.room_id = $2
 /// The bot API's page: PAGE_SQL's messages for a room already found, with
 /// the count and whether more lie beyond the page. $1 room, $2 before, $3 after.
 PAGE_SQL_FOR_API | """
-select json_build_object('messages', coalesce(json_agg(campfire_message_json(x) order by x.created_at, x.id), '[]'),
+select json_build_object('messages', coalesce(json_agg(x.id order by x.created_at, x.id), '[]'),
   'total', (select count(*) from messages where room_id = $1),
   'missing', ($2 <> 0 and not exists (select 1 from messages where id = $2 and room_id = $1))
           or ($3 <> 0 and not exists (select 1 from messages where id = $3 and room_id = $1)),
@@ -55,7 +56,9 @@ from (
 """
 
 act api_page(room_id, before, after)
-    return db::doc(PAGE_SQL_FOR_API, [room_id, before, after])
+    data | db::doc(PAGE_SQL_FOR_API, [room_id, before, after])
+    :update!(data{"messages"}, message_docs::load(data{"messages"}))
+    return data
 xx
 
 act numeric(s)
@@ -78,7 +81,7 @@ act index(c, room_id)
     if before < 0 or after < 0 => return http::error_page(404)
     data | db::doc(PAGE_SQL, [c{"user"}{"id"}, :int(room_id), before, after])
     if data == nil or data{"missing"} => return http::error_page(404)
-    list | data{"messages"}
+    list | message_docs::load(data{"messages"})
     if :len(list) == 0 => return http::head(204)
     return http::html("\n" + message_views::collection(c, list))
 xx
