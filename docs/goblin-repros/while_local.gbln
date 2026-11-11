@@ -10,4 +10,4 @@ act f(n)
     xx
     return out
 xx
-say f(3)
+:say f(3)

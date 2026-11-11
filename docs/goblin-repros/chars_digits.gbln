@@ -6,4 +6,4 @@ act f(s)
     xx
     return n
 xx
-say f("1f")
+:say f("1f")
