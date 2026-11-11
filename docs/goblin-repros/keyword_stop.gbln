@@ -2,4 +2,4 @@ act f(s)
     stop | 2
     return s[0:stop]
 xx
-say f("abc")
+:say f("abc")
